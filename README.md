@@ -8,26 +8,7 @@ A terminal-based reseller price research tool for comparing marketplace prices.
 
 ## Preview
 
-```
-┌─ Search ─────────────────────────┐┌─ Statistics ───────────────────┐
-│ > iPhone 14 Pro                  ││ Results: 8 listings            │
-└──────────────────────────────────┘│                                │
-┌─ Results ────────────────────────┐│ Min:     $680.00               │
-│ Platform    Price   Cond  Status ││ Max:     $920.00               │
-│ eBay       $760.00  Used  Sold   ││ Average: $800.00               │
-│ eBay       $840.00  New   Active ││ Median:  $795.00               │
-│ Mercari    $720.00  Good  Active │└────────────────────────────────┘
-│ Mercari    $680.00  Used  Sold   │┌─ Profit Calculator ───────────┐
-│ Amazon     $920.00  New   Active ││ Your Cost: $500                │
-│ eBay       $736.00  Used  Sold   ││ ─────────────────────────────  │
-│ Facebook   $640.00  Fair  Active ││ At Avg:  +$300.00 (60%)        │
-│ eBay       $800.00  Good  Active ││ At Min:  +$180.00 (36%)        │
-└──────────────────────────────────┘│ At Max:  +$420.00 (84%)        │
-┌─ History ────────────────────────┴┴────────────────────────────────┐
-│ Recent: iPhone 14 Pro | PS5 | Nintendo Switch | AirPods Pro        │
-└────────────────────────────────────────────────────────────────────┘
- / search  j/k navigate  Enter select  Tab panels  c cost  q quit
-```
+![mrktr preview](assets/preview.png)
 
 ## Features
 
