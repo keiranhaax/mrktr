@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -15,6 +16,10 @@ type stubProvider struct {
 	err        error
 }
 
+type contextProbeProvider struct {
+	sawCanceled bool
+}
+
 func (p stubProvider) Name() string {
 	return p.name
 }
@@ -23,11 +28,27 @@ func (p stubProvider) Configured() bool {
 	return p.configured
 }
 
-func (p stubProvider) Search(_ string) ([]types.Listing, error) {
+func (p stubProvider) Search(_ context.Context, _ string) ([]types.Listing, error) {
 	if p.err != nil {
 		return nil, p.err
 	}
 	return p.results, nil
+}
+
+func (p *contextProbeProvider) Name() string {
+	return "Probe"
+}
+
+func (p *contextProbeProvider) Configured() bool {
+	return true
+}
+
+func (p *contextProbeProvider) Search(ctx context.Context, _ string) ([]types.Listing, error) {
+	if err := ctx.Err(); err != nil {
+		p.sawCanceled = true
+		return nil, err
+	}
+	return []types.Listing{}, nil
 }
 
 func TestSearchPricesUnavailableWithoutProviders(t *testing.T) {
@@ -145,5 +166,21 @@ func TestSearchPricesSkipsUnconfiguredProviders(t *testing.T) {
 	}
 	if len(resp.Results) != 1 {
 		t.Fatalf("expected 1 listing, got %d", len(resp.Results))
+	}
+}
+
+func TestSearchPricesContextPassesContextToProviders(t *testing.T) {
+	probe := &contextProbeProvider{}
+	client := NewClient(probe)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	resp := client.SearchPricesContext(ctx, "ps5")
+	if resp.Mode != SearchModeUnavailable {
+		t.Fatalf("expected unavailable mode for canceled context, got %q", resp.Mode)
+	}
+	if !probe.sawCanceled {
+		t.Fatal("expected provider to observe canceled context")
 	}
 }

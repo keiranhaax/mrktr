@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -36,7 +37,7 @@ type SearchResponse struct {
 type SearchProvider interface {
 	Name() string
 	Configured() bool
-	Search(query string) ([]types.Listing, error)
+	Search(ctx context.Context, query string) ([]types.Listing, error)
 }
 
 // Client coordinates provider execution order.
@@ -62,6 +63,15 @@ func NewEnvClient() *Client {
 
 // SearchPrices searches for item prices across available providers.
 func (c *Client) SearchPrices(query string) SearchResponse {
+	return c.SearchPricesContext(context.Background(), query)
+}
+
+// SearchPricesContext searches for item prices using a caller-provided context.
+func (c *Client) SearchPricesContext(ctx context.Context, query string) SearchResponse {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	q := strings.TrimSpace(query)
 
 	if c == nil {
@@ -97,7 +107,7 @@ func (c *Client) SearchPrices(query string) SearchResponse {
 			return nil
 		}
 
-		results, err := provider.Search(q)
+		results, err := provider.Search(ctx, q)
 		if err != nil {
 			name := provider.Name()
 			if strings.TrimSpace(name) == "" {

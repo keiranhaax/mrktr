@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"mrktr/api"
 	"mrktr/types"
+	"net/url"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -136,10 +139,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleSearchResults(msg SearchResultsMsg) (tea.Model, tea.Cmd) {
+	if msg.gen != 0 && msg.gen != m.searchGen {
+		return m, nil
+	}
+
+	m.cancelActiveSearch()
 	m.loading = false
 	m.dataMode = msg.Mode
 	m.warning = msg.Warning
 	if msg.Err != nil {
+		if errors.Is(msg.Err, context.Canceled) {
+			return m, nil
+		}
 		m.err = msg.Err
 		m.reveal.Revealing = false
 		m.reveal.Rows = 0
@@ -190,10 +201,12 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch {
 	case key.Matches(msg, m.keys.ForceQuit):
+		m.cancelActiveSearch()
 		return m, tea.Quit
 
 	case key.Matches(msg, m.keys.Quit):
 		if m.focusedPanel != panelSearch && m.focusedPanel != panelCalculator {
+			m.cancelActiveSearch()
 			return m, tea.Quit
 		}
 
@@ -243,21 +256,7 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if key.Matches(msg, m.keys.Enter) {
-		query := strings.TrimSpace(m.searchInput.Value())
-		if query != "" {
-			expandedQuery := query
-			if m.productIndex != nil {
-				expandedQuery = m.productIndex.Expand(query)
-			}
-
-			m.loading = true
-			m.loadingDots = 0
-			m.warning = ""
-			m.err = nil
-			m.addToHistory(query)
-			return m, m.doSearch(expandedQuery)
-		}
-		return m, nil
+		return m.startSearch(m.searchInput.Value(), true)
 	}
 
 	var cmd tea.Cmd
@@ -312,6 +311,8 @@ func (m Model) handleCalculatorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if key.Matches(msg, m.keys.Enter) {
 		if val, err := strconv.ParseFloat(m.costInput.Value(), 64); err == nil {
 			m.cost = val
+		} else {
+			m.cost = 0
 		}
 		return m, nil
 	}
@@ -320,6 +321,8 @@ func (m Model) handleCalculatorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.costInput, cmd = m.costInput.Update(msg)
 	if val, err := strconv.ParseFloat(m.costInput.Value(), 64); err == nil {
 		m.cost = val
+	} else {
+		m.cost = 0
 	}
 	return m, cmd
 }
@@ -343,11 +346,7 @@ func (m Model) handleHistoryKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.history) > 0 && m.historyIndex < len(m.history) {
 			query := m.history[m.historyIndex]
 			m.searchInput.SetValue(query)
-			m.loading = true
-			m.loadingDots = 0
-			m.warning = ""
-			m.err = nil
-			return m, m.doSearch(query)
+			return m.startSearch(query, false)
 		}
 	}
 
@@ -490,8 +489,43 @@ func (m Model) hasSearchSuggestionMatch() bool {
 	return false
 }
 
+func (m *Model) cancelActiveSearch() {
+	if m.searchCancel == nil {
+		return
+	}
+	m.searchCancel()
+	m.searchCancel = nil
+}
+
+func (m Model) startSearch(rawQuery string, addToHistory bool) (tea.Model, tea.Cmd) {
+	query := strings.TrimSpace(rawQuery)
+	if query == "" {
+		return m, nil
+	}
+
+	expandedQuery := query
+	if m.productIndex != nil {
+		expandedQuery = m.productIndex.Expand(query)
+	}
+
+	m.cancelActiveSearch()
+	ctx, cancel := context.WithCancel(context.Background())
+	m.searchCancel = cancel
+	m.searchGen++
+
+	m.loading = true
+	m.loadingDots = 0
+	m.warning = ""
+	m.err = nil
+	if addToHistory {
+		m.addToHistory(query)
+	}
+
+	return m, m.doSearch(ctx, expandedQuery, m.searchGen)
+}
+
 // doSearch creates a command to fetch search results.
-func (m Model) doSearch(query string) tea.Cmd {
+func (m Model) doSearch(ctx context.Context, query string, gen int) tea.Cmd {
 	client := m.apiClient
 	if client == nil {
 		client = api.NewEnvClient()
@@ -500,12 +534,13 @@ func (m Model) doSearch(query string) tea.Cmd {
 	return tea.Batch(
 		m.spinner.Tick,
 		func() tea.Msg {
-			response := client.SearchPrices(strings.TrimSpace(query))
+			response := client.SearchPricesContext(ctx, strings.TrimSpace(query))
 			return SearchResultsMsg{
 				Results: response.Results,
 				Mode:    response.Mode,
 				Warning: response.Warning,
 				Err:     response.Err,
+				gen:     gen,
 			}
 		},
 	)
@@ -518,15 +553,42 @@ func openURLCmd(url string) tea.Cmd {
 }
 
 // openURL opens a URL in the default browser.
-func openURL(url string) error {
+func validateOpenURL(rawURL string) (*url.URL, error) {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return nil, fmt.Errorf("open URL: empty URL")
+	}
+
+	parsedURL, err := url.Parse(trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("open URL: invalid URL: %w", err)
+	}
+	if parsedURL.Scheme == "" || parsedURL.Host == "" {
+		return nil, fmt.Errorf("open URL: invalid URL %q", trimmed)
+	}
+
+	scheme := strings.ToLower(parsedURL.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return nil, fmt.Errorf("open URL: unsupported URL scheme %q", parsedURL.Scheme)
+	}
+
+	return parsedURL, nil
+}
+
+func openURL(rawURL string) error {
+	parsedURL, err := validateOpenURL(rawURL)
+	if err != nil {
+		return err
+	}
+
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		cmd = exec.Command("open", url)
+		cmd = exec.Command("open", parsedURL.String())
 	case "linux":
-		cmd = exec.Command("xdg-open", url)
+		cmd = exec.Command("xdg-open", parsedURL.String())
 	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", parsedURL.String())
 	}
 	if cmd != nil {
 		if err := cmd.Start(); err != nil {

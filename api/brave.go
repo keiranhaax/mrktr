@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -43,7 +44,7 @@ func (p *BraveProvider) Configured() bool {
 	return p != nil && p.apiKey != ""
 }
 
-func (p *BraveProvider) Search(query string) ([]types.Listing, error) {
+func (p *BraveProvider) Search(ctx context.Context, query string) ([]types.Listing, error) {
 	if !p.Configured() {
 		return nil, fmt.Errorf("BRAVE_API_KEY not set")
 	}
@@ -63,12 +64,11 @@ func (p *BraveProvider) Search(query string) ([]types.Listing, error) {
 	params.Set("count", "20")
 	searchURL.RawQuery = params.Encode()
 
-	req, err := http.NewRequest(http.MethodGet, searchURL.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("create brave request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Accept-Encoding", "gzip")
 	req.Header.Set("X-Subscription-Token", p.apiKey)
 
 	resp, err := p.client.Do(req)

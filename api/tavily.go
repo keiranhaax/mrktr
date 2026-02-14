@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -42,7 +43,7 @@ func (p *TavilyProvider) Configured() bool {
 	return p != nil && p.apiKey != ""
 }
 
-func (p *TavilyProvider) Search(query string) ([]types.Listing, error) {
+func (p *TavilyProvider) Search(ctx context.Context, query string) ([]types.Listing, error) {
 	if !p.Configured() {
 		return nil, fmt.Errorf("TAVILY_API_KEY not set")
 	}
@@ -59,7 +60,7 @@ func (p *TavilyProvider) Search(query string) ([]types.Listing, error) {
 		return nil, fmt.Errorf("marshal tavily request: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, p.searchURL, bytes.NewReader(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.searchURL, bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("create tavily request: %w", err)
 	}

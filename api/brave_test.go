@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"strings"
@@ -20,7 +21,7 @@ func TestSearchBraveChecksHTTPStatus(t *testing.T) {
 
 	provider := NewBraveProvider("brave-key", "https://brave.test/res/v1/web/search", client)
 
-	_, err := provider.Search("ps5")
+	_, err := provider.Search(context.Background(), "ps5")
 	if err == nil {
 		t.Fatal("expected error for non-2xx brave response")
 	}
@@ -33,12 +34,14 @@ func TestSearchBraveBuildsQueryAndParsesResults(t *testing.T) {
 	var gotPath string
 	var gotQuery string
 	var gotToken string
+	var gotEncoding string
 
 	client := &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			gotPath = req.URL.Path
 			gotQuery = req.URL.Query().Get("q")
 			gotToken = req.Header.Get("X-Subscription-Token")
+			gotEncoding = req.Header.Get("Accept-Encoding")
 
 			body := `{
 				"web": {
@@ -62,7 +65,7 @@ func TestSearchBraveBuildsQueryAndParsesResults(t *testing.T) {
 
 	provider := NewBraveProvider("brave-key", "https://brave.test/res/v1/web/search", client)
 
-	results, err := provider.Search("switch")
+	results, err := provider.Search(context.Background(), "switch")
 	if err != nil {
 		t.Fatalf("expected successful brave search, got %v", err)
 	}
@@ -75,6 +78,9 @@ func TestSearchBraveBuildsQueryAndParsesResults(t *testing.T) {
 	}
 	if gotToken != "brave-key" {
 		t.Fatalf("expected subscription token header, got %q", gotToken)
+	}
+	if gotEncoding != "" {
+		t.Fatalf("expected Accept-Encoding header to be unset, got %q", gotEncoding)
 	}
 	if len(results) != 1 {
 		t.Fatalf("expected 1 parsed listing, got %d", len(results))

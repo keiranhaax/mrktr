@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"strings"
@@ -26,7 +27,7 @@ func TestSearchFirecrawlChecksHTTPStatus(t *testing.T) {
 
 	provider := NewFirecrawlProvider("firecrawl-key", "https://firecrawl.test/v1/search", client)
 
-	_, err := provider.Search("ps5")
+	_, err := provider.Search(context.Background(), "ps5")
 	if err == nil {
 		t.Fatal("expected error for non-2xx firecrawl response")
 	}

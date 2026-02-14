@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -42,7 +43,7 @@ func (p *FirecrawlProvider) Configured() bool {
 	return p != nil && p.apiKey != ""
 }
 
-func (p *FirecrawlProvider) Search(query string) ([]types.Listing, error) {
+func (p *FirecrawlProvider) Search(ctx context.Context, query string) ([]types.Listing, error) {
 	if !p.Configured() {
 		return nil, fmt.Errorf("FIRECRAWL_API_KEY not set")
 	}
@@ -58,7 +59,7 @@ func (p *FirecrawlProvider) Search(query string) ([]types.Listing, error) {
 		return nil, fmt.Errorf("marshal firecrawl request: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, p.searchURL, bytes.NewReader(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.searchURL, bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("create firecrawl request: %w", err)
 	}

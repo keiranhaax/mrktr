@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"mrktr/api"
 	"mrktr/types"
@@ -10,6 +13,69 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+type captureQueryProvider struct {
+	query string
+}
+
+type cancelAwareProvider struct {
+	mu             sync.Mutex
+	calls          int
+	startedOnce    sync.Once
+	canceledOnce   sync.Once
+	firstStartedCh chan struct{}
+	firstCancelCh  chan struct{}
+}
+
+func (p *captureQueryProvider) Name() string {
+	return "Capture"
+}
+
+func (p *captureQueryProvider) Configured() bool {
+	return true
+}
+
+func (p *captureQueryProvider) Search(_ context.Context, query string) ([]types.Listing, error) {
+	p.query = query
+	return []types.Listing{}, nil
+}
+
+func (p *cancelAwareProvider) Name() string {
+	return "CancelAware"
+}
+
+func (p *cancelAwareProvider) Configured() bool {
+	return true
+}
+
+func (p *cancelAwareProvider) Search(ctx context.Context, query string) ([]types.Listing, error) {
+	p.mu.Lock()
+	p.calls++
+	callNum := p.calls
+	p.mu.Unlock()
+
+	if callNum == 1 {
+		p.startedOnce.Do(func() {
+			close(p.firstStartedCh)
+		})
+		<-ctx.Done()
+		p.canceledOnce.Do(func() {
+			close(p.firstCancelCh)
+		})
+		return nil, ctx.Err()
+	}
+
+	return []types.Listing{
+		{
+			Platform:  "eBay",
+			Price:     199.0,
+			Condition: "Used",
+			Status:    "Active",
+			URL:       "https://example.com/item",
+			Title:     query,
+		},
+	}, nil
+}
 
 func TestSearchInputHandlesSingleKeyOnce(t *testing.T) {
 	m := newTestModel()
@@ -412,6 +478,267 @@ func TestLoadingDotsReset(t *testing.T) {
 	}
 	if historyModel.loadingDots != 0 {
 		t.Fatalf("expected loading dots reset to 0 on history replay, got %d", historyModel.loadingDots)
+	}
+}
+
+func TestSearchEnterWhileLoadingStartsReplacementSearch(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.searchGen = 3
+	canceled := false
+	m.searchCancel = func() {
+		canceled = true
+	}
+	m.searchInput.SetValue("ps5")
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	um, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", m, updated)
+	}
+	if cmd == nil {
+		t.Fatal("expected replacement search command while loading")
+	}
+	if !canceled {
+		t.Fatal("expected prior in-flight search context to be canceled")
+	}
+	if um.searchGen != 4 {
+		t.Fatalf("expected search generation increment to 4, got %d", um.searchGen)
+	}
+	if got := len(um.history); got != 1 {
+		t.Fatalf("expected replacement search to update history, got %d items", got)
+	}
+}
+
+func TestHistoryEnterWhileLoadingStartsReplacementSearch(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.searchGen = 8
+	canceled := false
+	m.searchCancel = func() {
+		canceled = true
+	}
+	m.history = []string{"ps5"}
+	m.historyIndex = 0
+	m.focusedPanel = panelHistory
+	m = m.updateFocus()
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	um, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", m, updated)
+	}
+	if cmd == nil {
+		t.Fatal("expected history replay replacement command while loading")
+	}
+	if !canceled {
+		t.Fatal("expected prior in-flight search context to be canceled")
+	}
+	if got := um.searchInput.Value(); got != "ps5" {
+		t.Fatalf("expected search input to switch to replay query, got %q", got)
+	}
+	if um.searchGen != 9 {
+		t.Fatalf("expected search generation increment to 9, got %d", um.searchGen)
+	}
+}
+
+func TestHistoryEnterUsesExpandedQuery(t *testing.T) {
+	provider := &captureQueryProvider{}
+	m := newTestModel()
+	m.apiClient = api.NewClient(provider)
+	m.history = []string{"ps5"}
+	m.historyIndex = 0
+	m.focusedPanel = panelHistory
+	m = m.updateFocus()
+
+	wantQuery := "ps5"
+	if m.productIndex != nil {
+		wantQuery = m.productIndex.Expand("ps5")
+	}
+	if wantQuery == "ps5" {
+		t.Fatal("expected test precondition to expand ps5 query")
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", m, updated)
+	}
+	if cmd == nil {
+		t.Fatal("expected history replay command")
+	}
+
+	cmdMsg := cmd()
+	batchMsg, ok := cmdMsg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected batch command message, got %T", cmdMsg)
+	}
+	if len(batchMsg) == 0 {
+		t.Fatal("expected batch message to contain commands")
+	}
+
+	lastCmd := batchMsg[len(batchMsg)-1]
+	if lastCmd == nil {
+		t.Fatal("expected search command in batch")
+	}
+	if _, ok := lastCmd().(SearchResultsMsg); !ok {
+		t.Fatalf("expected search command to return SearchResultsMsg")
+	}
+	if provider.query != wantQuery {
+		t.Fatalf("expected expanded query %q, got %q", wantQuery, provider.query)
+	}
+}
+
+func TestCalculatorInvalidInputResetsCost(t *testing.T) {
+	m := newTestModel()
+	m.focusedPanel = panelCalculator
+	m = m.updateFocus()
+	m.cost = 10
+
+	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if m.cost != 0 {
+		t.Fatalf("expected invalid cost input to reset cost to 0, got %v", m.cost)
+	}
+}
+
+func TestValidateOpenURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		rawURL  string
+		wantErr bool
+	}{
+		{name: "https", rawURL: "https://example.com", wantErr: false},
+		{name: "http", rawURL: "http://example.com/path", wantErr: false},
+		{name: "file scheme", rawURL: "file:///etc/passwd", wantErr: true},
+		{name: "javascript scheme", rawURL: "javascript:alert(1)", wantErr: true},
+		{name: "missing host", rawURL: "https:///missing-host", wantErr: true},
+		{name: "relative url", rawURL: "/relative/path", wantErr: true},
+		{name: "empty", rawURL: "   ", wantErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := validateOpenURL(tc.rawURL)
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error for %q", tc.rawURL)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("expected no error for %q, got %v", tc.rawURL, err)
+			}
+		})
+	}
+}
+
+func TestStartingNewSearchCancelsPreviousAndIgnoresStaleResults(t *testing.T) {
+	provider := &cancelAwareProvider{
+		firstStartedCh: make(chan struct{}),
+		firstCancelCh:  make(chan struct{}),
+	}
+
+	m := newTestModel()
+	m.apiClient = api.NewClient(provider)
+	m.searchInput.SetValue("first")
+
+	updated1, cmd1 := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m1, ok := updated1.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", m, updated1)
+	}
+	if cmd1 == nil {
+		t.Fatal("expected first search command")
+	}
+
+	cmdMsg1 := cmd1()
+	batch1, ok := cmdMsg1.(tea.BatchMsg)
+	if !ok || len(batch1) == 0 {
+		t.Fatalf("expected first batch command message, got %T", cmdMsg1)
+	}
+	searchCmd1 := batch1[len(batch1)-1]
+	if searchCmd1 == nil {
+		t.Fatal("expected first search command in batch")
+	}
+
+	firstSearchResult := make(chan SearchResultsMsg, 1)
+	go func() {
+		msg, _ := searchCmd1().(SearchResultsMsg)
+		firstSearchResult <- msg
+	}()
+
+	select {
+	case <-provider.firstStartedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first search request to start")
+	}
+
+	m1.searchInput.SetValue("second")
+	updated2, cmd2 := m1.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m2, ok := updated2.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", m1, updated2)
+	}
+	if cmd2 == nil {
+		t.Fatal("expected second search command")
+	}
+	if m2.searchGen <= m1.searchGen {
+		t.Fatalf("expected search generation to advance (%d -> %d)", m1.searchGen, m2.searchGen)
+	}
+
+	select {
+	case <-provider.firstCancelCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first search request cancellation")
+	}
+
+	cmdMsg2 := cmd2()
+	batch2, ok := cmdMsg2.(tea.BatchMsg)
+	if !ok || len(batch2) == 0 {
+		t.Fatalf("expected second batch command message, got %T", cmdMsg2)
+	}
+	searchCmd2 := batch2[len(batch2)-1]
+	if searchCmd2 == nil {
+		t.Fatal("expected second search command in batch")
+	}
+
+	secondMsg, ok := searchCmd2().(SearchResultsMsg)
+	if !ok {
+		t.Fatalf("expected second search command to produce SearchResultsMsg")
+	}
+	if secondMsg.gen != m2.searchGen {
+		t.Fatalf("expected second message generation %d, got %d", m2.searchGen, secondMsg.gen)
+	}
+
+	updatedDone, _ := m2.Update(secondMsg)
+	doneModel, ok := updatedDone.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", m2, updatedDone)
+	}
+	if doneModel.loading {
+		t.Fatal("expected loading=false after second search completes")
+	}
+	if len(doneModel.results) != 1 {
+		t.Fatalf("expected one result from second search, got %d", len(doneModel.results))
+	}
+	if doneModel.results[0].Title != "second" {
+		t.Fatalf("expected second query result title, got %q", doneModel.results[0].Title)
+	}
+
+	var staleMsg SearchResultsMsg
+	select {
+	case staleMsg = <-firstSearchResult:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first search response")
+	}
+	if staleMsg.gen == 0 {
+		t.Fatal("expected stale message to include non-zero generation")
+	}
+
+	updatedAfterStale, _ := doneModel.Update(staleMsg)
+	afterStale, ok := updatedAfterStale.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", doneModel, updatedAfterStale)
+	}
+	if afterStale.loading != doneModel.loading || len(afterStale.results) != len(doneModel.results) || afterStale.err != doneModel.err {
+		t.Fatal("expected stale search result message to be ignored")
 	}
 }
 

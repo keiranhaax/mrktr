@@ -76,16 +76,17 @@ func (m Model) renderResultsPanel(width, height int) string {
 			cursor = "▸"
 		}
 
-		row := fmt.Sprintf("%-*s %*d %-*s %*s  %-*s ",
+		platformCell := platformStyleFor(r.Platform).Render(fmt.Sprintf("%-*s", colPlatform, platformRaw))
+		priceCell := priceStyle.Render(fmt.Sprintf("%*s", colPrice, price))
+		conditionCell := fmt.Sprintf("%-*s", colCondition, cond)
+
+		row := fmt.Sprintf("%-*s %*d %s %s  %s ",
 			colCursor, cursor,
 			colNum, i+1,
-			colPlatform, platformRaw,
-			colPrice, price,
-			colCondition, cond,
+			platformCell,
+			priceCell,
+			conditionCell,
 		)
-
-		row = strings.Replace(row, platformRaw, platformStyleFor(r.Platform).Render(platformRaw), 1)
-		row = strings.Replace(row, price, priceStyle.Render(price), 1)
 
 		var statusStyled string
 		if status == "Sold" {

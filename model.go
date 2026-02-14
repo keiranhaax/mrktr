@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"mrktr/api"
 	"mrktr/types"
 	"time"
@@ -97,6 +98,10 @@ type Model struct {
 	// API
 	apiClient *api.Client
 
+	// Search cancellation and stale-response protection
+	searchCancel context.CancelFunc
+	searchGen    int
+
 	// Animations
 	focusFlash  FocusFlash
 	reveal      RevealAnim
@@ -171,6 +176,7 @@ type SearchResultsMsg struct {
 	Mode    api.SearchMode
 	Warning string
 	Err     error
+	gen     int
 }
 
 type openURLResultMsg struct {

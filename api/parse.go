@@ -7,7 +7,14 @@ import (
 	"strings"
 )
 
-var pricePattern = regexp.MustCompile(`\$(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)`)
+var (
+	pricePattern           = regexp.MustCompile(`\$(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?`)
+	conditionNewPattern    = regexp.MustCompile(`\bnew\b`)
+	conditionSealedPattern = regexp.MustCompile(`\bsealed\b`)
+	conditionGoodPattern   = regexp.MustCompile(`\bgood\b`)
+	conditionFairPattern   = regexp.MustCompile(`\bfair\b`)
+	statusSoldPattern      = regexp.MustCompile(`\bsold\b`)
+)
 
 // SearchResult normalizes provider payload fields for parsing.
 type SearchResult struct {
@@ -41,11 +48,8 @@ func ParseSearchResults(data []SearchResult) []types.Listing {
 		}
 
 		text := item.Title + " " + item.Description
-		if matches := pricePattern.FindStringSubmatch(text); len(matches) > 1 {
-			priceStr := strings.ReplaceAll(matches[1], ",", "")
-			if price, err := strconv.ParseFloat(priceStr, 64); err == nil {
-				listing.Price = price
-			}
+		if price, ok := extractBestPrice(text); ok {
+			listing.Price = price
 		}
 
 		if listing.Price == 0 {
@@ -54,17 +58,17 @@ func ParseSearchResults(data []SearchResult) []types.Listing {
 
 		textLower := strings.ToLower(text)
 		switch {
-		case strings.Contains(textLower, "new") || strings.Contains(textLower, "sealed"):
+		case conditionNewPattern.MatchString(textLower) || conditionSealedPattern.MatchString(textLower):
 			listing.Condition = "New"
-		case strings.Contains(textLower, "good"):
+		case conditionGoodPattern.MatchString(textLower):
 			listing.Condition = "Good"
-		case strings.Contains(textLower, "fair"):
+		case conditionFairPattern.MatchString(textLower):
 			listing.Condition = "Fair"
 		default:
 			listing.Condition = "Used"
 		}
 
-		if strings.Contains(textLower, "sold") {
+		if statusSoldPattern.MatchString(textLower) {
 			listing.Status = "Sold"
 		} else {
 			listing.Status = "Active"
@@ -74,6 +78,50 @@ func ParseSearchResults(data []SearchResult) []types.Listing {
 	}
 
 	return listings
+}
+
+// extractBestPrice returns the lowest positive USD amount found in the text.
+// This helps pick current prices in snippets like "Was $150, now $99".
+func extractBestPrice(text string) (float64, bool) {
+	matches := pricePattern.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 {
+		return 0, false
+	}
+
+	best := 0.0
+	found := false
+
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+
+		whole := strings.ReplaceAll(match[1], ",", "")
+		if whole == "" {
+			continue
+		}
+
+		priceStr := whole
+		if len(match) > 2 && match[2] != "" {
+			decimal := match[2]
+			if len(decimal) == 1 {
+				decimal += "0"
+			}
+			priceStr += "." + decimal
+		}
+
+		price, err := strconv.ParseFloat(priceStr, 64)
+		if err != nil || price <= 0 {
+			continue
+		}
+
+		if !found || price < best {
+			best = price
+			found = true
+		}
+	}
+
+	return best, found
 }
 
 func summarizeHTTPBody(body []byte) string {
