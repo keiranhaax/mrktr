@@ -1,0 +1,17 @@
+# Binaries
+mrktr
+mrktr.exe
+mrktr-*
+*.exe
+*.test
+*.out
+
+# Build artifacts
+bin/
+vendor/
+coverage.out
+coverage.tmp
+.cache/
+
+# OS files
+.DS_Store
