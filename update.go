@@ -13,9 +13,39 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// Total ticks for each intro phase
+const (
+	introRevealTicks = 30 // character-by-character reveal
+	introGlowTicks   = 15 // glow sweep across text
+	introFadeTicks   = 8  // fade out
+	introTotalTicks  = introRevealTicks + introGlowTicks + introFadeTicks
+)
+
 // Update handles messages and updates the model (required by tea.Model interface)
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case introTickMsg:
+		if !m.showIntro {
+			return m, nil
+		}
+		m.introTick++
+
+		if m.introTick < introRevealTicks {
+			m.introPhase = 0
+		} else if m.introTick < introRevealTicks+introGlowTicks {
+			m.introPhase = 1
+		} else if m.introTick < introTotalTicks {
+			m.introPhase = 2
+		} else {
+			m.showIntro = false
+			m.introCompleted = true
+			return m, nil
+		}
+
+		return m, tea.Tick(40*time.Millisecond, func(time.Time) tea.Msg {
+			return introTickMsg{}
+		})
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -137,6 +167,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Skip intro on any key
+		if m.showIntro {
+			m.showIntro = false
+			m.introCompleted = true
+			return m, nil
+		}
+
 		// Global keys
 		switch msg.String() {
 		case "ctrl+c":

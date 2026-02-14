@@ -2,6 +2,7 @@ package main
 
 import (
 	"mrktr/types"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -24,6 +25,12 @@ type Model struct {
 	// Terminal dimensions
 	width  int
 	height int
+
+	// Intro animation
+	showIntro      bool
+	introTick      int
+	introPhase     int // 0=reveal letters, 1=glow sweep, 2=fade out
+	introCompleted bool
 
 	// Focus management
 	focusedPanel int
@@ -89,6 +96,7 @@ func NewModel() Model {
 	sp.Style = spinnerStyle
 
 	return Model{
+		showIntro:    true,
 		focusedPanel: panelSearch,
 		searchInput:  si,
 		costInput:    ci,
@@ -101,7 +109,13 @@ func NewModel() Model {
 
 // Init initializes the model (required by tea.Model interface)
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, m.spinner.Tick)
+	return tea.Batch(
+		textinput.Blink,
+		m.spinner.Tick,
+		tea.Tick(40*time.Millisecond, func(time.Time) tea.Msg {
+			return introTickMsg{}
+		}),
+	)
 }
 
 // visibleResultRows returns how many result rows fit in the results panel.
@@ -133,3 +147,5 @@ type revealRowTickMsg struct {
 type statsRevealTickMsg struct {
 	gen int
 }
+
+type introTickMsg struct{}

@@ -11,7 +11,7 @@ import (
 )
 
 func TestSearchInputHandlesSingleKeyOnce(t *testing.T) {
-	m := NewModel()
+	m := newTestModel()
 	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 
 	if got := m.searchInput.Value(); got != "a" {
@@ -20,7 +20,7 @@ func TestSearchInputHandlesSingleKeyOnce(t *testing.T) {
 }
 
 func TestCalculatorInputHandlesSingleKeyOnce(t *testing.T) {
-	m := NewModel()
+	m := newTestModel()
 	m.focusedPanel = panelCalculator
 	m = m.updateFocus()
 
@@ -31,7 +31,7 @@ func TestCalculatorInputHandlesSingleKeyOnce(t *testing.T) {
 }
 
 func TestCKeyTypesInCalculatorInsteadOfRefocus(t *testing.T) {
-	m := NewModel()
+	m := newTestModel()
 	m.focusedPanel = panelCalculator
 	m = m.updateFocus()
 
@@ -45,7 +45,7 @@ func TestCKeyTypesInCalculatorInsteadOfRefocus(t *testing.T) {
 }
 
 func TestCKeyFocusesCalculatorFromResults(t *testing.T) {
-	m := NewModel()
+	m := newTestModel()
 	m.focusedPanel = panelResults
 	m = m.updateFocus()
 
@@ -56,7 +56,7 @@ func TestCKeyFocusesCalculatorFromResults(t *testing.T) {
 }
 
 func TestHistoryEnterReplaysSelectedQuery(t *testing.T) {
-	m := NewModel()
+	m := newTestModel()
 	m.history = []string{"ps5", "switch"}
 	m.historyIndex = 1
 	m.focusedPanel = panelHistory
@@ -79,7 +79,7 @@ func TestHistoryEnterReplaysSelectedQuery(t *testing.T) {
 }
 
 func TestResultsEnterReturnsOpenURLCommand(t *testing.T) {
-	m := NewModel()
+	m := newTestModel()
 	m.focusedPanel = panelResults
 	m.results = []types.Listing{{URL: "https://example.com"}}
 
@@ -90,7 +90,7 @@ func TestResultsEnterReturnsOpenURLCommand(t *testing.T) {
 }
 
 func TestRenderHistoryPanelShowsSelectionMarker(t *testing.T) {
-	m := NewModel()
+	m := newTestModel()
 	m.focusedPanel = panelHistory
 	m.history = []string{"ps5", "switch", "airpods"}
 	m.historyIndex = 1
@@ -102,7 +102,7 @@ func TestRenderHistoryPanelShowsSelectionMarker(t *testing.T) {
 }
 
 func TestViewShowsSmallTerminalMessage(t *testing.T) {
-	m := NewModel()
+	m := newTestModel()
 	m.width = 50
 	m.height = 10
 
@@ -113,7 +113,7 @@ func TestViewShowsSmallTerminalMessage(t *testing.T) {
 }
 
 func TestSpinnerActiveWhileLoading(t *testing.T) {
-	m := NewModel()
+	m := newTestModel()
 	m.loading = true
 
 	if got := strings.TrimSpace(m.spinner.View()); got == "" {
@@ -122,7 +122,7 @@ func TestSpinnerActiveWhileLoading(t *testing.T) {
 }
 
 func TestScrollOffsetOnNavigation(t *testing.T) {
-	m := NewModel()
+	m := newTestModel()
 	m.focusedPanel = panelResults
 	m = m.updateFocus()
 	m.height = 16
@@ -150,7 +150,7 @@ func TestScrollOffsetOnNavigation(t *testing.T) {
 }
 
 func TestScrollOffsetResetsOnNewResults(t *testing.T) {
-	m := NewModel()
+	m := newTestModel()
 	m.results = makeListings(20)
 	m.selectedIndex = 7
 	m.resultsOffset = 5
@@ -173,7 +173,7 @@ func TestScrollOffsetResetsOnNewResults(t *testing.T) {
 }
 
 func TestScrollOffsetClampsOnResize(t *testing.T) {
-	m := NewModel()
+	m := newTestModel()
 	m.results = makeListings(20)
 	m.resultsOffset = 15
 
@@ -189,7 +189,7 @@ func TestScrollOffsetClampsOnResize(t *testing.T) {
 }
 
 func TestFocusFlashGeneration(t *testing.T) {
-	m := NewModel()
+	m := newTestModel()
 	m.focusedPanel = panelSearch
 	m = m.updateFocus()
 
@@ -231,7 +231,7 @@ func TestFocusFlashGeneration(t *testing.T) {
 }
 
 func TestRevealInterruptOnNavigate(t *testing.T) {
-	m := NewModel()
+	m := newTestModel()
 	m.focusedPanel = panelResults
 	m = m.updateFocus()
 	m.height = 24
@@ -249,7 +249,7 @@ func TestRevealInterruptOnNavigate(t *testing.T) {
 }
 
 func TestRevealGeneration(t *testing.T) {
-	m := NewModel()
+	m := newTestModel()
 	m.height = 24
 	m.results = makeListings(12)
 	m.revealing = true
@@ -276,7 +276,7 @@ func TestRevealGeneration(t *testing.T) {
 }
 
 func TestLoadingDotsReset(t *testing.T) {
-	m := NewModel()
+	m := newTestModel()
 	m.searchInput.SetValue("ps5")
 	m.loadingDots = 3
 	m.focusedPanel = panelSearch
@@ -327,7 +327,7 @@ func TestLoadingDotsReset(t *testing.T) {
 		t.Fatalf("expected loading dots to stop incrementing when loading=false (before=%d after=%d)", before, afterModel.loadingDots)
 	}
 
-	m2 := NewModel()
+	m2 := newTestModel()
 	m2.focusedPanel = panelHistory
 	m2 = m2.updateFocus()
 	m2.history = []string{"switch"}
@@ -345,6 +345,13 @@ func TestLoadingDotsReset(t *testing.T) {
 	if historyModel.loadingDots != 0 {
 		t.Fatalf("expected loading dots reset to 0 on history replay, got %d", historyModel.loadingDots)
 	}
+}
+
+func newTestModel() Model {
+	m := NewModel()
+	m.showIntro = false
+	m.introCompleted = true
+	return m
 }
 
 func makeListings(n int) []types.Listing {

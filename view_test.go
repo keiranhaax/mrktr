@@ -11,7 +11,7 @@ func TestLayoutOverheadConsistency(t *testing.T) {
 		t.Fatalf("expected layoutOverhead to be 14, got %d", layoutOverhead)
 	}
 
-	m := NewModel()
+	m := newTestModel()
 	m.width = 120
 	m.height = 32
 	m.results = makeListings(25)

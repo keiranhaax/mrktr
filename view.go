@@ -14,6 +14,11 @@ func (m Model) View() string {
 	if m.width == 0 {
 		return "Loading..."
 	}
+
+	if m.showIntro {
+		return m.renderIntro()
+	}
+
 	if m.width < 64 || m.height < 14 {
 		return helpStyle.Render(
 			fmt.Sprintf(
@@ -81,6 +86,180 @@ func (m Model) View() string {
 		mainArea,
 		historyPanel,
 		helpBar,
+	)
+}
+
+// Pre-rendered ASCII art for "m r k t r" (figlet starwars font).
+// Each line is the same visual width — pure ASCII for consistent alignment.
+var introArtLines = []string{
+	`.___  ___.    .______          __  ___    .___________.   .______`,
+	`|   \/   |    |   _  \        |  |/  /    |           |   |   _  \`,
+	`|  \  /  |    |  |_)  |       |  '  /     ` + "`" + `---|  |----` + "`" + `   |  |_)  |`,
+	`|  |\/|  |    |      /        |    <          |  |        |      /`,
+	`|  |  |  |    |  |\  \----.   |  .  \         |  |        |  |\  \----.`,
+	`|__|  |__|    | _| ` + "`" + `._____|   |__|\__\        |__|        | _| ` + "`" + `._____|`,
+}
+
+func (m Model) renderIntro() string {
+	// Pad all lines to the same width
+	maxWidth := 0
+	for _, line := range introArtLines {
+		if w := len([]rune(line)); w > maxWidth {
+			maxWidth = w
+		}
+	}
+	artLines := make([]string, len(introArtLines))
+	for i, line := range introArtLines {
+		runes := []rune(line)
+		if len(runes) < maxWidth {
+			line += strings.Repeat(" ", maxWidth-len(runes))
+		}
+		artLines[i] = line
+	}
+
+	// Calculate how many total characters in the art
+	totalChars := 0
+	for _, line := range artLines {
+		totalChars += len([]rune(line))
+	}
+
+	// Calculate animation progress
+	var revealFraction float64
+	var glowPosition float64
+	var fadeOpacity float64
+
+	switch m.introPhase {
+	case 0: // Reveal phase
+		revealFraction = float64(m.introTick) / float64(introRevealTicks)
+		if revealFraction > 1 {
+			revealFraction = 1
+		}
+	case 1: // Glow sweep phase
+		revealFraction = 1
+		glowProgress := float64(m.introTick-introRevealTicks) / float64(introGlowTicks)
+		if glowProgress > 1 {
+			glowProgress = 1
+		}
+		glowPosition = glowProgress
+	case 2: // Fade out phase
+		revealFraction = 1
+		glowPosition = 1
+		fadeProgress := float64(m.introTick-introRevealTicks-introGlowTicks) / float64(introFadeTicks)
+		if fadeProgress > 1 {
+			fadeProgress = 1
+		}
+		fadeOpacity = fadeProgress
+	}
+
+	_ = glowPosition
+	_ = fadeOpacity
+
+	// Render each line with animation
+	var rendered []string
+	charIndex := 0
+
+	for _, line := range artLines {
+		runes := []rune(line)
+		var lineBuilder strings.Builder
+
+		for _, r := range runes {
+			charProgress := float64(charIndex) / float64(max(1, totalChars))
+			charIndex++
+
+			if charProgress > revealFraction {
+				lineBuilder.WriteRune(' ')
+				continue
+			}
+
+			// Calculate color based on position and phase
+			var color string
+			t := charProgress
+
+			if m.introPhase >= 1 {
+				// Glow sweep: bright highlight passes from left to right
+				dist := math.Abs(t - glowPosition)
+				glowWidth := 0.15
+				if dist < glowWidth {
+					glowIntensity := 1.0 - (dist / glowWidth)
+					// Interpolate from base gradient toward white/bright
+					baseColor := interpolateHexColor("#7D56F4", "#EA80FC", t)
+					color = interpolateHexColor(baseColor, "#FFFFFF", glowIntensity*0.7)
+				} else {
+					color = interpolateHexColor("#7D56F4", "#EA80FC", t)
+				}
+			} else {
+				// Reveal phase: fade in from dark to gradient color
+				appearProgress := 0.0
+				revealPoint := charProgress
+				if revealFraction > revealPoint {
+					appearProgress = math.Min(1.0, (revealFraction-revealPoint)*3.0)
+				}
+				targetColor := interpolateHexColor("#7D56F4", "#EA80FC", t)
+				color = interpolateHexColor("#1D1D2E", targetColor, appearProgress)
+			}
+
+			// Apply fade out in phase 2
+			if m.introPhase == 2 {
+				color = interpolateHexColor(color, "#1D1D2E", fadeOpacity)
+			}
+
+			lineBuilder.WriteString(
+				lipgloss.NewStyle().
+					Foreground(lipgloss.Color(color)).
+					Render(string(r)),
+			)
+		}
+
+		rendered = append(rendered, lineBuilder.String())
+	}
+
+	// Subtitle with fade-in
+	subtitle := ""
+	if m.introPhase >= 1 {
+		subText := "reseller price research"
+		subOpacity := 1.0
+		if m.introPhase == 1 {
+			subOpacity = float64(m.introTick-introRevealTicks) / float64(introGlowTicks)
+		}
+		if m.introPhase == 2 {
+			subOpacity = 1.0 - fadeOpacity
+		}
+		subColor := interpolateHexColor("#1D1D2E", "#667085", math.Min(1, subOpacity))
+		subtitle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(subColor)).
+			Render(subText)
+	}
+
+	// Skip hint
+	skipHint := ""
+	if m.introTick > 5 {
+		hintOpacity := math.Min(1.0, float64(m.introTick-5)/10.0)
+		if m.introPhase == 2 {
+			hintOpacity = math.Max(0, hintOpacity*(1.0-fadeOpacity))
+		}
+		hintColor := interpolateHexColor("#1D1D2E", "#475467", hintOpacity)
+		skipHint = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(hintColor)).
+			Italic(true).
+			Render("press any key to skip")
+	}
+
+	// Center everything
+	artBlock := strings.Join(rendered, "\n")
+	content := lipgloss.JoinVertical(
+		lipgloss.Center,
+		"",
+		artBlock,
+		"",
+		subtitle,
+		"",
+		skipHint,
+	)
+
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		content,
 	)
 }
 
