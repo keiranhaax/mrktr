@@ -8,6 +8,10 @@ import (
 )
 
 func main() {
+	if err := loadDotEnvFile(".env"); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to load .env: %v\n", err)
+	}
+
 	// Create new program with our model
 	p := tea.NewProgram(
 		NewModel(),

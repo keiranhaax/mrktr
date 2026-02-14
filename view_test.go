@@ -16,9 +16,9 @@ func TestLayoutOverheadConsistency(t *testing.T) {
 	m.height = 32
 	m.results = makeListings(25)
 	m.selectedIndex = 0
-	m.revealedRows = len(m.results)
-	m.revealing = false
-	m.statsRevealed = 6
+	m.reveal.Rows = len(m.results)
+	m.reveal.Revealing = false
+	m.statsReveal.Revealed = 6
 
 	resultsHeight := max(4, m.height-layoutOverhead)
 	if got, want := m.visibleResultRows(), max(1, resultsHeight-2); got != want {

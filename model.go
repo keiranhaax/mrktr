@@ -1,9 +1,11 @@
 package main
 
 import (
+	"mrktr/api"
 	"mrktr/types"
 	"time"
 
+	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,23 +22,55 @@ const (
 
 const layoutOverhead = 14
 
-// Model represents the application state
+// IntroAnimation groups intro animation state.
+type IntroAnimation struct {
+	Show      bool
+	Completed bool
+	Tick      int
+	Phase     int // 0=reveal letters, 1=glow sweep, 2=fade out
+}
+
+// FocusFlash groups focus highlight animation state.
+type FocusFlash struct {
+	Ticks  int
+	Gen    int
+	Active bool
+}
+
+// RevealAnim groups results reveal animation state.
+type RevealAnim struct {
+	Rows      int
+	Gen       int
+	Revealing bool
+}
+
+// StatsReveal groups statistics reveal animation state.
+type StatsReveal struct {
+	Revealed int
+	Gen      int
+}
+
+// Model represents the application state.
 type Model struct {
 	// Terminal dimensions
 	width  int
 	height int
 
+	// Shared components
+	keys keyMap
+	help help.Model
+
 	// Intro animation
-	showIntro      bool
-	introTick      int
-	introPhase     int // 0=reveal letters, 1=glow sweep, 2=fade out
-	introCompleted bool
+	intro IntroAnimation
 
 	// Focus management
 	focusedPanel int
 
 	// Search
 	searchInput textinput.Model
+
+	// Query enhancement
+	productIndex *api.ProductIndex
 
 	// Results
 	results       []types.Listing
@@ -57,36 +91,29 @@ type Model struct {
 	loadingDots int
 	spinner     spinner.Model
 	err         error
-	dataMode    searchMode
+	dataMode    api.SearchMode
 	warning     string
 
-	// Animation: focus flash
-	focusFlashTicks  int
-	focusFlashActive bool
-	focusFlashGen    int
+	// API
+	apiClient *api.Client
 
-	// Animation: results reveal
-	revealedRows int
-	revealing    bool
-	revealGen    int
-
-	// Animation: stats reveal
-	statsRevealed  int
-	statsRevealGen int
+	// Animations
+	focusFlash  FocusFlash
+	reveal      RevealAnim
+	statsReveal StatsReveal
 }
 
-// NewModel creates a new application model with initial state
+// NewModel creates a new application model with initial state.
 func NewModel() Model {
 	// Initialize search input
 	si := textinput.New()
-	si.Placeholder = "Enter item to search..."
 	si.Focus()
 	si.CharLimit = 100
 	si.Width = 30
+	si.ShowSuggestions = true
 
 	// Initialize cost input
 	ci := textinput.New()
-	ci.Placeholder = "0.00"
 	ci.CharLimit = 10
 	ci.Width = 10
 
@@ -95,19 +122,33 @@ func NewModel() Model {
 	sp.Spinner = spinner.MiniDot
 	sp.Style = spinnerStyle
 
+	hp := help.New()
+	hp.ShortSeparator = "  "
+	hp.FullSeparator = "   "
+	hp.Styles.ShortKey = keyStyle
+	hp.Styles.ShortDesc = keyDescStyle
+	hp.Styles.ShortSeparator = separatorStyle
+	hp.Styles.Ellipsis = separatorStyle
+	hp.Styles.FullKey = keyStyle
+	hp.Styles.FullDesc = keyDescStyle
+	hp.Styles.FullSeparator = separatorStyle
+
 	return Model{
-		showIntro:    true,
+		keys:         defaultKeyMap(),
+		help:         hp,
+		intro:        IntroAnimation{Show: true},
 		focusedPanel: panelSearch,
 		searchInput:  si,
+		productIndex: api.NewProductIndex(),
 		costInput:    ci,
 		spinner:      sp,
 		results:      []types.Listing{},
 		history:      []string{},
-		dataMode:     searchModeDemo,
+		apiClient:    api.NewEnvClient(),
 	}
 }
 
-// Init initializes the model (required by tea.Model interface)
+// Init initializes the model (required by tea.Model interface).
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		textinput.Blink,
@@ -124,10 +165,10 @@ func (m Model) visibleResultRows() int {
 	return max(1, resultsHeight-2)
 }
 
-// SearchResultsMsg contains search results from the API
+// SearchResultsMsg contains search results from the API.
 type SearchResultsMsg struct {
 	Results []types.Listing
-	Mode    searchMode
+	Mode    api.SearchMode
 	Warning string
 	Err     error
 }

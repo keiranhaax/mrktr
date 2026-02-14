@@ -13,6 +13,9 @@ A terminal-based reseller price research tool for comparing marketplace prices.
 ## Features
 
 - **Multi-Marketplace Search** - Compare prices across eBay, Mercari, Amazon, and Facebook Marketplace
+- **Brave-First Search Pipeline** - Uses Brave Search as primary provider with Tavily fallback
+- **Conservative Query Expansion** - TF-IDF product matching expands vague queries when confidence is high
+- **Inline Predictive Suggestions** - Ghost text suggestions from search history + product catalog
 - **Real-Time Statistics** - Instantly see min, max, average, and median prices
 - **Profit Calculator** - Enter your cost and see potential profit margins
 - **Search History** - Quick access to recent searches
@@ -51,28 +54,15 @@ mrktr
 
 ## Configuration
 
-mrktr uses search APIs to fetch real marketplace data. Configure your API keys as environment variables:
+mrktr uses live search APIs. Configure at least one provider key as an environment variable:
 
 ```bash
-# Firecrawl (primary)
-export FIRECRAWL_API_KEY="your-firecrawl-api-key"
-
-# Tavily (fallback)
-export TAVILY_API_KEY="your-tavily-api-key"
+BRAVE_API_KEY
+TAVILY_API_KEY
+FIRECRAWL_API_KEY
 ```
 
-### Demo Mode
-
-If no API keys are configured, mrktr runs in demo mode with sample data. This is useful for testing the interface.
-
-### Adding to Shell Profile
-
-Add to your `~/.zshrc` or `~/.bashrc`:
-
-```bash
-export FIRECRAWL_API_KEY="your-key-here"
-export TAVILY_API_KEY="your-key-here"
-```
+`mrktr` automatically loads a local `.env` file from the `mrktr/` working directory at startup.
 
 ## Usage
 
@@ -85,6 +75,7 @@ export TAVILY_API_KEY="your-key-here"
 
 2. **Search for an item**
    - Type your search query (e.g., "iPhone 14 Pro")
+   - Press `Tab` to accept inline suggestion text
    - Press `Enter` to search
 
 3. **Review results**
@@ -105,7 +96,7 @@ export TAVILY_API_KEY="your-key-here"
 |-----|--------|
 | `/` | Focus search input |
 | `Enter` | Execute search / Open selected URL |
-| `Tab` | Cycle between panels |
+| `Tab` | Accept search suggestion / Cycle panels |
 | `Shift+Tab` | Cycle panels backwards |
 | `j` / `Down` | Move down in list |
 | `k` / `Up` | Move up in list |
@@ -123,7 +114,12 @@ mrktr/
 ├── update.go        # Keyboard handling and state updates
 ├── view.go          # UI rendering logic
 ├── styles.go        # Lip Gloss styles and colors
-├── api.go           # Search API integration
+├── api/             # Search providers, parsing, query suggestions
+│   ├── search.go
+│   ├── brave.go
+│   ├── tavily.go
+│   ├── firecrawl.go
+│   └── suggest.go
 ├── types/           # Listing and statistics types
 │   └── listing.go
 ├── go.mod           # Go module definition
@@ -136,16 +132,17 @@ mrktr/
 - **TUI Framework:** [Bubble Tea](https://github.com/charmbracelet/bubbletea)
 - **Styling:** [Lip Gloss](https://github.com/charmbracelet/lipgloss)
 - **Components:** [Bubbles](https://github.com/charmbracelet/bubbles)
-- **Search APIs:** Firecrawl, Tavily
+- **Search APIs:** Brave Search API, Tavily, Firecrawl (rollback fallback)
 
 ## How It Works
 
 1. **Search Query** - User enters an item name
-2. **API Request** - Query is sent to Firecrawl/Tavily with marketplace site filters
-3. **Price Parsing** - Regex extracts prices from search results
-4. **Platform Detection** - URLs are parsed to identify the marketplace
-5. **Statistics** - Min, max, average, and median are calculated
-6. **Display** - Results are rendered in the dashboard
+2. **Query Enhancement** - Short ambiguous queries are expanded via local TF-IDF product index
+3. **API Request** - Query is sent to Brave/Tavily/Firecrawl with marketplace site filters
+4. **Price Parsing** - Regex extracts prices from search results
+5. **Platform Detection** - URLs are parsed to identify the marketplace
+6. **Statistics** - Min, max, average, and median are calculated
+7. **Display** - Results are rendered in the dashboard
 
 ## Contributing
 
@@ -169,15 +166,6 @@ go run .
 # If your environment blocks the default Go cache location
 GOCACHE=$(pwd)/.cache/go-build GOMODCACHE=$(pwd)/.cache/go-mod go test ./...
 ```
-
-## Roadmap
-
-- [ ] Persistent search history
-- [ ] Export results to CSV
-- [ ] Price alerts
-- [ ] More marketplace support
-- [ ] Saved searches
-- [ ] Price history graphs
 
 ## License
 

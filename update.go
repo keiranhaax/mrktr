@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"mrktr/api"
 	"mrktr/types"
 	"os/exec"
 	"runtime"
@@ -9,11 +10,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// Total ticks for each intro phase
+// Total ticks for each intro phase.
 const (
 	introRevealTicks = 30 // character-by-character reveal
 	introGlowTicks   = 15 // glow sweep across text
@@ -21,24 +23,24 @@ const (
 	introTotalTicks  = introRevealTicks + introGlowTicks + introFadeTicks
 )
 
-// Update handles messages and updates the model (required by tea.Model interface)
+// Update handles messages and updates the model (required by tea.Model interface).
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case introTickMsg:
-		if !m.showIntro {
+		if !m.intro.Show {
 			return m, nil
 		}
-		m.introTick++
+		m.intro.Tick++
 
-		if m.introTick < introRevealTicks {
-			m.introPhase = 0
-		} else if m.introTick < introRevealTicks+introGlowTicks {
-			m.introPhase = 1
-		} else if m.introTick < introTotalTicks {
-			m.introPhase = 2
+		if m.intro.Tick < introRevealTicks {
+			m.intro.Phase = 0
+		} else if m.intro.Tick < introRevealTicks+introGlowTicks {
+			m.intro.Phase = 1
+		} else if m.intro.Tick < introTotalTicks {
+			m.intro.Phase = 2
 		} else {
-			m.showIntro = false
-			m.introCompleted = true
+			m.intro.Show = false
+			m.intro.Completed = true
 			return m, nil
 		}
 
@@ -56,48 +58,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case SearchResultsMsg:
-		m.loading = false
-		m.dataMode = msg.Mode
-		m.warning = msg.Warning
-		if msg.Err != nil {
-			m.err = msg.Err
-			m.revealing = false
-			m.revealedRows = 0
-			m.statsRevealed = 0
-			return m, nil
-		}
-		m.results = msg.Results
-		m.stats = types.CalculateStats(m.results)
-		m.selectedIndex = 0
-		m.resultsOffset = 0
-		m.err = nil
-
-		var cmds []tea.Cmd
-		if len(m.results) > 0 {
-			m.revealGen++
-			m.revealedRows = 0
-			m.revealing = true
-			revealGen := m.revealGen
-			cmds = append(cmds, tea.Tick(30*time.Millisecond, func(time.Time) tea.Msg {
-				return revealRowTickMsg{gen: revealGen}
-			}))
-
-			m.statsRevealGen++
-			m.statsRevealed = 0
-			statsGen := m.statsRevealGen
-			cmds = append(cmds, tea.Tick(30*time.Millisecond, func(time.Time) tea.Msg {
-				return statsRevealTickMsg{gen: statsGen}
-			}))
-		} else {
-			m.revealing = false
-			m.revealedRows = 0
-			m.statsRevealed = 0
-		}
-
-		if len(cmds) > 0 {
-			return m, tea.Batch(cmds...)
-		}
-		return m, nil
+		return m.handleSearchResults(msg)
 
 	case openURLResultMsg:
 		if msg.Err != nil {
@@ -106,53 +67,53 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case focusFlashTickMsg:
-		if msg.gen != m.focusFlashGen || !m.focusFlashActive {
+		if msg.gen != m.focusFlash.Gen || !m.focusFlash.Active {
 			return m, nil
 		}
-		if m.focusFlashTicks <= 1 {
-			m.focusFlashTicks = 0
-			m.focusFlashActive = false
+		if m.focusFlash.Ticks <= 1 {
+			m.focusFlash.Ticks = 0
+			m.focusFlash.Active = false
 			return m, nil
 		}
-		m.focusFlashTicks--
-		gen := m.focusFlashGen
+		m.focusFlash.Ticks--
+		gen := m.focusFlash.Gen
 		return m, tea.Tick(80*time.Millisecond, func(time.Time) tea.Msg {
 			return focusFlashTickMsg{gen: gen}
 		})
 
 	case revealRowTickMsg:
-		if msg.gen != m.revealGen || !m.revealing {
+		if msg.gen != m.reveal.Gen || !m.reveal.Revealing {
 			return m, nil
 		}
 		targetRows := min(len(m.results), m.visibleResultRows())
-		if m.revealedRows < targetRows {
-			m.revealedRows++
+		if m.reveal.Rows < targetRows {
+			m.reveal.Rows++
 		}
-		if m.revealedRows >= targetRows {
-			m.revealing = false
+		if m.reveal.Rows >= targetRows {
+			m.reveal.Revealing = false
 			return m, nil
 		}
-		gen := m.revealGen
+		gen := m.reveal.Gen
 		return m, tea.Tick(30*time.Millisecond, func(time.Time) tea.Msg {
 			return revealRowTickMsg{gen: gen}
 		})
 
 	case statsRevealTickMsg:
-		if msg.gen != m.statsRevealGen {
+		if msg.gen != m.statsReveal.Gen {
 			return m, nil
 		}
 		if len(m.results) == 0 {
 			return m, nil
 		}
 		const totalStatsLines = 6
-		if m.statsRevealed >= totalStatsLines {
+		if m.statsReveal.Revealed >= totalStatsLines {
 			return m, nil
 		}
-		m.statsRevealed++
-		if m.statsRevealed >= totalStatsLines {
+		m.statsReveal.Revealed++
+		if m.statsReveal.Revealed >= totalStatsLines {
 			return m, nil
 		}
-		gen := m.statsRevealGen
+		gen := m.statsReveal.Gen
 		return m, tea.Tick(30*time.Millisecond, func(time.Time) tea.Msg {
 			return statsRevealTickMsg{gen: gen}
 		})
@@ -167,150 +128,233 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// Skip intro on any key
-		if m.showIntro {
-			m.showIntro = false
-			m.introCompleted = true
-			return m, nil
-		}
+		updated, cmd := m.handleKeyMsg(msg)
+		return updated, cmd
+	}
 
-		// Global keys
-		switch msg.String() {
-		case "ctrl+c":
+	return m, nil
+}
+
+func (m Model) handleSearchResults(msg SearchResultsMsg) (tea.Model, tea.Cmd) {
+	m.loading = false
+	m.dataMode = msg.Mode
+	m.warning = msg.Warning
+	if msg.Err != nil {
+		m.err = msg.Err
+		m.reveal.Revealing = false
+		m.reveal.Rows = 0
+		m.statsReveal.Revealed = 0
+		return m, nil
+	}
+
+	m.results = msg.Results
+	m.stats = types.CalculateStats(m.results)
+	m.selectedIndex = 0
+	m.resultsOffset = 0
+	m.err = nil
+
+	var cmds []tea.Cmd
+	if len(m.results) > 0 {
+		m.reveal.Gen++
+		m.reveal.Rows = 0
+		m.reveal.Revealing = true
+		revealGen := m.reveal.Gen
+		cmds = append(cmds, tea.Tick(30*time.Millisecond, func(time.Time) tea.Msg {
+			return revealRowTickMsg{gen: revealGen}
+		}))
+
+		m.statsReveal.Gen++
+		m.statsReveal.Revealed = 0
+		statsGen := m.statsReveal.Gen
+		cmds = append(cmds, tea.Tick(30*time.Millisecond, func(time.Time) tea.Msg {
+			return statsRevealTickMsg{gen: statsGen}
+		}))
+	} else {
+		m.reveal.Revealing = false
+		m.reveal.Rows = 0
+		m.statsReveal.Revealed = 0
+	}
+
+	if len(cmds) > 0 {
+		return m, tea.Batch(cmds...)
+	}
+	return m, nil
+}
+
+func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.intro.Show {
+		m.intro.Show = false
+		m.intro.Completed = true
+		return m, nil
+	}
+
+	switch {
+	case key.Matches(msg, m.keys.ForceQuit):
+		return m, tea.Quit
+
+	case key.Matches(msg, m.keys.Quit):
+		if m.focusedPanel != panelSearch && m.focusedPanel != panelCalculator {
 			return m, tea.Quit
-		case "q":
-			if m.focusedPanel != panelSearch && m.focusedPanel != panelCalculator {
-				return m, tea.Quit
-			}
-
-		case "tab":
-			nextPanel := (m.focusedPanel + 1) % 5
-			return m.changeFocus(nextPanel)
-
-		case "shift+tab":
-			prevPanel := m.focusedPanel - 1
-			if prevPanel < 0 {
-				prevPanel = panelHistory
-			}
-			return m.changeFocus(prevPanel)
-
-		case "/":
-			return m.changeFocus(panelSearch)
-
-		case "c":
-			// Focus calculator only when not in text inputs.
-			if m.focusedPanel != panelSearch && m.focusedPanel != panelCalculator {
-				return m.changeFocus(panelCalculator)
-			}
-
-		case "esc":
-			return m.changeFocus(panelResults)
 		}
 
-		// Panel-specific keys
-		switch m.focusedPanel {
-		case panelSearch:
-			switch msg.String() {
-			case "enter":
-				// Execute search
-				query := strings.TrimSpace(m.searchInput.Value())
-				if query != "" {
-					m.loading = true
-					m.loadingDots = 0
-					m.warning = ""
-					m.err = nil
-					m.addToHistory(query)
-					return m, m.doSearch(query)
-				}
-				return m, nil
-			}
-			var cmd tea.Cmd
-			m.searchInput, cmd = m.searchInput.Update(msg)
-			return m, cmd
+	case key.Matches(msg, m.keys.Tab):
+		// Prioritize textinput autocomplete in search panel before global focus cycling.
+		if m.focusedPanel == panelSearch &&
+			m.searchInput.ShowSuggestions &&
+			m.hasSearchSuggestionMatch() {
+			return m.handleSearchKeys(msg)
+		}
 
-		case panelResults:
-			switch msg.String() {
-			case "j", "down":
-				if m.revealing {
-					m.revealing = false
-					m.revealedRows = len(m.results)
-				}
-				if m.selectedIndex < len(m.results)-1 {
-					m.selectedIndex++
-					visible := m.visibleResultRows()
-					if m.selectedIndex >= m.resultsOffset+visible {
-						m.resultsOffset = m.selectedIndex - visible + 1
-					}
-				}
-			case "k", "up":
-				if m.revealing {
-					m.revealing = false
-					m.revealedRows = len(m.results)
-				}
-				if m.selectedIndex > 0 {
-					m.selectedIndex--
-					if m.selectedIndex < m.resultsOffset {
-						m.resultsOffset = m.selectedIndex
-					}
-				}
-			case "enter":
-				// Open URL in browser
-				if len(m.results) > 0 && m.selectedIndex < len(m.results) {
-					url := m.results[m.selectedIndex].URL
-					if url != "" {
-						return m, openURLCmd(url)
-					}
-				}
-			}
-			return m, nil
+		nextPanel := (m.focusedPanel + 1) % 5
+		return m.changeFocus(nextPanel)
 
-		case panelCalculator:
-			switch msg.String() {
-			case "enter":
-				// Parse cost and unfocus
-				if val, err := strconv.ParseFloat(m.costInput.Value(), 64); err == nil {
-					m.cost = val
-				}
-				return m, nil
-			}
-			var cmd tea.Cmd
-			m.costInput, cmd = m.costInput.Update(msg)
-			// Auto-update cost as typing
-			if val, err := strconv.ParseFloat(m.costInput.Value(), 64); err == nil {
-				m.cost = val
-			}
-			return m, cmd
+	case key.Matches(msg, m.keys.ShiftTab):
+		prevPanel := m.focusedPanel - 1
+		if prevPanel < 0 {
+			prevPanel = panelHistory
+		}
+		return m.changeFocus(prevPanel)
 
-		case panelHistory:
-			switch msg.String() {
-			case "j", "right":
-				if m.historyIndex < len(m.history)-1 {
-					m.historyIndex++
-				}
-			case "k", "left":
-				if m.historyIndex > 0 {
-					m.historyIndex--
-				}
-			case "enter":
-				// Re-run selected history search
-				if len(m.history) > 0 && m.historyIndex < len(m.history) {
-					query := m.history[m.historyIndex]
-					m.searchInput.SetValue(query)
-					m.loading = true
-					m.loadingDots = 0
-					m.warning = ""
-					m.err = nil
-					return m, m.doSearch(query)
-				}
+	case key.Matches(msg, m.keys.Search):
+		return m.changeFocus(panelSearch)
+
+	case key.Matches(msg, m.keys.Calculator):
+		if m.focusedPanel != panelSearch && m.focusedPanel != panelCalculator {
+			return m.changeFocus(panelCalculator)
+		}
+
+	case key.Matches(msg, m.keys.Escape):
+		return m.changeFocus(panelResults)
+	}
+
+	switch m.focusedPanel {
+	case panelSearch:
+		return m.handleSearchKeys(msg)
+	case panelResults:
+		return m.handleResultsKeys(msg)
+	case panelCalculator:
+		return m.handleCalculatorKeys(msg)
+	case panelHistory:
+		return m.handleHistoryKeys(msg)
+	}
+
+	return m, nil
+}
+
+func (m Model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if key.Matches(msg, m.keys.Enter) {
+		query := strings.TrimSpace(m.searchInput.Value())
+		if query != "" {
+			expandedQuery := query
+			if m.productIndex != nil {
+				expandedQuery = m.productIndex.Expand(query)
 			}
-			return m, nil
+
+			m.loading = true
+			m.loadingDots = 0
+			m.warning = ""
+			m.err = nil
+			m.addToHistory(query)
+			return m, m.doSearch(expandedQuery)
+		}
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.searchInput, cmd = m.searchInput.Update(msg)
+	m.refreshSearchSuggestions()
+	return m, cmd
+}
+
+func (m Model) handleResultsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if key.Matches(msg, m.keys.Down) {
+		if m.reveal.Revealing {
+			m.reveal.Revealing = false
+			m.reveal.Rows = len(m.results)
+		}
+		if m.selectedIndex < len(m.results)-1 {
+			m.selectedIndex++
+			visible := m.visibleResultRows()
+			if m.selectedIndex >= m.resultsOffset+visible {
+				m.resultsOffset = m.selectedIndex - visible + 1
+			}
+		}
+		return m, nil
+	}
+
+	if key.Matches(msg, m.keys.Up) {
+		if m.reveal.Revealing {
+			m.reveal.Revealing = false
+			m.reveal.Rows = len(m.results)
+		}
+		if m.selectedIndex > 0 {
+			m.selectedIndex--
+			if m.selectedIndex < m.resultsOffset {
+				m.resultsOffset = m.selectedIndex
+			}
+		}
+		return m, nil
+	}
+
+	if key.Matches(msg, m.keys.Enter) {
+		if len(m.results) > 0 && m.selectedIndex < len(m.results) {
+			url := m.results[m.selectedIndex].URL
+			if url != "" {
+				return m, openURLCmd(url)
+			}
 		}
 	}
 
 	return m, nil
 }
 
-// updateFocus manages focus state for text inputs
+func (m Model) handleCalculatorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if key.Matches(msg, m.keys.Enter) {
+		if val, err := strconv.ParseFloat(m.costInput.Value(), 64); err == nil {
+			m.cost = val
+		}
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.costInput, cmd = m.costInput.Update(msg)
+	if val, err := strconv.ParseFloat(m.costInput.Value(), 64); err == nil {
+		m.cost = val
+	}
+	return m, cmd
+}
+
+func (m Model) handleHistoryKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if key.Matches(msg, m.keys.HistNext) {
+		if m.historyIndex < len(m.history)-1 {
+			m.historyIndex++
+		}
+		return m, nil
+	}
+
+	if key.Matches(msg, m.keys.HistPrev) {
+		if m.historyIndex > 0 {
+			m.historyIndex--
+		}
+		return m, nil
+	}
+
+	if key.Matches(msg, m.keys.Enter) {
+		if len(m.history) > 0 && m.historyIndex < len(m.history) {
+			query := m.history[m.historyIndex]
+			m.searchInput.SetValue(query)
+			m.loading = true
+			m.loadingDots = 0
+			m.warning = ""
+			m.err = nil
+			return m, m.doSearch(query)
+		}
+	}
+
+	return m, nil
+}
+
+// updateFocus manages focus state for text inputs.
 func (m Model) updateFocus() Model {
 	if m.focusedPanel == panelSearch {
 		m.searchInput.Focus()
@@ -333,39 +377,130 @@ func (m Model) changeFocus(newPanel int) (tea.Model, tea.Cmd) {
 
 	m.focusedPanel = newPanel
 	m = m.updateFocus()
-	m.focusFlashGen++
-	m.focusFlashTicks = 3
-	m.focusFlashActive = true
-	gen := m.focusFlashGen
+	m.focusFlash.Gen++
+	m.focusFlash.Ticks = 3
+	m.focusFlash.Active = true
+	gen := m.focusFlash.Gen
 
 	return m, tea.Tick(80*time.Millisecond, func(time.Time) tea.Msg {
 		return focusFlashTickMsg{gen: gen}
 	})
 }
 
-// addToHistory adds a search query to history (avoiding duplicates)
+// addToHistory adds a search query to history (avoiding duplicates).
 func (m *Model) addToHistory(query string) {
-	// Remove if already exists
 	for i, h := range m.history {
 		if h == query {
 			m.history = append(m.history[:i], m.history[i+1:]...)
 			break
 		}
 	}
-	// Add to front
 	m.history = append([]string{query}, m.history...)
-	// Limit to 20 items
 	if len(m.history) > 20 {
 		m.history = m.history[:20]
 	}
 }
 
-// doSearch creates a command to fetch search results
+func (m *Model) refreshSearchSuggestions() {
+	prefix := strings.TrimSpace(m.searchInput.Value())
+	if len(prefix) < 2 {
+		m.searchInput.SetSuggestions(nil)
+		return
+	}
+
+	history := filterHistory(m.history, prefix, 4)
+	var products []string
+	if m.productIndex != nil {
+		products = m.productIndex.Suggest(prefix)
+	}
+
+	m.searchInput.SetSuggestions(mergeSuggestions(history, products, 8))
+}
+
+func filterHistory(history []string, prefix string, limit int) []string {
+	if len(history) == 0 || limit <= 0 {
+		return nil
+	}
+
+	p := strings.ToLower(strings.TrimSpace(prefix))
+	if p == "" {
+		return nil
+	}
+
+	out := make([]string, 0, limit)
+	for _, item := range history {
+		if strings.HasPrefix(strings.ToLower(item), p) {
+			out = append(out, item)
+			if len(out) == limit {
+				break
+			}
+		}
+	}
+	return out
+}
+
+func mergeSuggestions(first, second []string, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+
+	out := make([]string, 0, limit)
+	seen := map[string]struct{}{}
+
+	appendUnique := func(items []string) {
+		for _, item := range items {
+			trimmed := strings.TrimSpace(item)
+			if trimmed == "" {
+				continue
+			}
+			key := strings.ToLower(trimmed)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, trimmed)
+			if len(out) == limit {
+				return
+			}
+		}
+	}
+
+	appendUnique(first)
+	if len(out) < limit {
+		appendUnique(second)
+	}
+	return out
+}
+
+func (m Model) hasSearchSuggestionMatch() bool {
+	if len(m.searchInput.MatchedSuggestions()) > 0 {
+		return true
+	}
+
+	prefix := strings.ToLower(strings.TrimSpace(m.searchInput.Value()))
+	if prefix == "" {
+		return false
+	}
+
+	for _, suggestion := range m.searchInput.AvailableSuggestions() {
+		if strings.HasPrefix(strings.ToLower(suggestion), prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// doSearch creates a command to fetch search results.
 func (m Model) doSearch(query string) tea.Cmd {
+	client := m.apiClient
+	if client == nil {
+		client = api.NewEnvClient()
+	}
+
 	return tea.Batch(
 		m.spinner.Tick,
 		func() tea.Msg {
-			response := SearchPrices(strings.TrimSpace(query))
+			response := client.SearchPrices(strings.TrimSpace(query))
 			return SearchResultsMsg{
 				Results: response.Results,
 				Mode:    response.Mode,
@@ -382,7 +517,7 @@ func openURLCmd(url string) tea.Cmd {
 	}
 }
 
-// openURL opens a URL in the default browser
+// openURL opens a URL in the default browser.
 func openURL(url string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {

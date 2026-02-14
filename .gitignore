@@ -12,6 +12,7 @@ vendor/
 coverage.out
 coverage.tmp
 .cache/
+.env
 
 # OS files
 .DS_Store

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"mrktr/api"
 	"mrktr/types"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -157,7 +158,7 @@ func TestScrollOffsetResetsOnNewResults(t *testing.T) {
 
 	updated, _ := m.Update(SearchResultsMsg{
 		Results: makeListings(3),
-		Mode:    searchModeDemo,
+		Mode:    api.SearchModeLive,
 	})
 	um, ok := updated.(Model)
 	if !ok {
@@ -201,14 +202,14 @@ func TestFocusFlashGeneration(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected focus flash tick command on focus change")
 	}
-	if !um.focusFlashActive {
+	if !um.focusFlash.Active {
 		t.Fatal("expected focus flash to be active after tab")
 	}
-	if um.focusFlashTicks != 3 {
-		t.Fatalf("expected 3 flash ticks after focus change, got %d", um.focusFlashTicks)
+	if um.focusFlash.Ticks != 3 {
+		t.Fatalf("expected 3 flash ticks after focus change, got %d", um.focusFlash.Ticks)
 	}
-	if um.focusFlashGen != 1 {
-		t.Fatalf("expected flash generation 1, got %d", um.focusFlashGen)
+	if um.focusFlash.Gen != 1 {
+		t.Fatalf("expected flash generation 1, got %d", um.focusFlash.Gen)
 	}
 
 	staleUpdated, _ := um.Update(focusFlashTickMsg{gen: 0})
@@ -216,8 +217,8 @@ func TestFocusFlashGeneration(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected model type %T, got %T", um, staleUpdated)
 	}
-	if staleModel.focusFlashTicks != 3 {
-		t.Fatalf("expected stale flash tick to be ignored, got ticks=%d", staleModel.focusFlashTicks)
+	if staleModel.focusFlash.Ticks != 3 {
+		t.Fatalf("expected stale flash tick to be ignored, got ticks=%d", staleModel.focusFlash.Ticks)
 	}
 
 	currentUpdated, _ := staleModel.Update(focusFlashTickMsg{gen: 1})
@@ -225,8 +226,75 @@ func TestFocusFlashGeneration(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected model type %T, got %T", staleModel, currentUpdated)
 	}
-	if currentModel.focusFlashTicks != 2 {
-		t.Fatalf("expected current flash tick to decrement to 2, got %d", currentModel.focusFlashTicks)
+	if currentModel.focusFlash.Ticks != 2 {
+		t.Fatalf("expected current flash tick to decrement to 2, got %d", currentModel.focusFlash.Ticks)
+	}
+}
+
+func TestTabAcceptsSearchSuggestionBeforeChangingPanel(t *testing.T) {
+	m := newTestModel()
+	m.focusedPanel = panelSearch
+	m = m.updateFocus()
+	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	um, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", m, updated)
+	}
+
+	if um.focusedPanel != panelSearch {
+		t.Fatalf("expected focus to stay on search panel, got %d", um.focusedPanel)
+	}
+	if got := um.searchInput.Value(); got == "swi" {
+		t.Fatalf("expected tab to accept suggestion value, input remained %q", got)
+	}
+}
+
+func TestTabChangesPanelWhenSearchSuggestionDoesNotMatch(t *testing.T) {
+	m := newTestModel()
+	m.focusedPanel = panelSearch
+	m = m.updateFocus()
+	m.searchInput.SetValue("zzz")
+	m.searchInput.SetSuggestions([]string{"Nintendo Switch OLED"})
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	um, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", m, updated)
+	}
+
+	if um.focusedPanel != panelResults {
+		t.Fatalf("expected tab to change focus to results panel, got %d", um.focusedPanel)
+	}
+}
+
+func TestSearchSuggestionsMergeHistoryAndCatalogMatches(t *testing.T) {
+	m := newTestModel()
+	m.history = []string{"switch carrying case", "ps5"}
+	m.searchInput.SetValue("sw")
+
+	m.refreshSearchSuggestions()
+	got := m.searchInput.AvailableSuggestions()
+	if len(got) == 0 {
+		t.Fatal("expected suggestions for prefix")
+	}
+	if got[0] != "switch carrying case" {
+		t.Fatalf("expected history suggestion first, got %q", got[0])
+	}
+
+	foundCatalogSuggestion := false
+	for _, suggestion := range got {
+		if strings.Contains(strings.ToLower(suggestion), "switch") &&
+			suggestion != "switch carrying case" {
+			foundCatalogSuggestion = true
+			break
+		}
+	}
+	if !foundCatalogSuggestion {
+		t.Fatalf("expected catalog-backed suggestion in %v", got)
 	}
 }
 
@@ -236,15 +304,15 @@ func TestRevealInterruptOnNavigate(t *testing.T) {
 	m = m.updateFocus()
 	m.height = 24
 	m.results = makeListings(10)
-	m.revealing = true
-	m.revealedRows = 2
+	m.reveal.Revealing = true
+	m.reveal.Rows = 2
 
 	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	if m.revealing {
+	if m.reveal.Revealing {
 		t.Fatal("expected reveal animation to stop on navigation")
 	}
-	if m.revealedRows != len(m.results) {
-		t.Fatalf("expected revealed rows to jump to full length %d, got %d", len(m.results), m.revealedRows)
+	if m.reveal.Rows != len(m.results) {
+		t.Fatalf("expected revealed rows to jump to full length %d, got %d", len(m.results), m.reveal.Rows)
 	}
 }
 
@@ -252,17 +320,17 @@ func TestRevealGeneration(t *testing.T) {
 	m := newTestModel()
 	m.height = 24
 	m.results = makeListings(12)
-	m.revealing = true
-	m.revealedRows = 1
-	m.revealGen = 2
+	m.reveal.Revealing = true
+	m.reveal.Rows = 1
+	m.reveal.Gen = 2
 
 	staleUpdated, _ := m.Update(revealRowTickMsg{gen: 1})
 	staleModel, ok := staleUpdated.(Model)
 	if !ok {
 		t.Fatalf("expected model type %T, got %T", m, staleUpdated)
 	}
-	if staleModel.revealedRows != 1 {
-		t.Fatalf("expected stale reveal tick to be ignored, got %d", staleModel.revealedRows)
+	if staleModel.reveal.Rows != 1 {
+		t.Fatalf("expected stale reveal tick to be ignored, got %d", staleModel.reveal.Rows)
 	}
 
 	currentUpdated, _ := staleModel.Update(revealRowTickMsg{gen: 2})
@@ -270,8 +338,8 @@ func TestRevealGeneration(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected model type %T, got %T", staleModel, currentUpdated)
 	}
-	if currentModel.revealedRows != 2 {
-		t.Fatalf("expected current reveal tick to increment to 2, got %d", currentModel.revealedRows)
+	if currentModel.reveal.Rows != 2 {
+		t.Fatalf("expected current reveal tick to increment to 2, got %d", currentModel.reveal.Rows)
 	}
 }
 
@@ -308,7 +376,7 @@ func TestLoadingDotsReset(t *testing.T) {
 
 	updatedDone, _ := tickModel.Update(SearchResultsMsg{
 		Results: makeListings(2),
-		Mode:    searchModeDemo,
+		Mode:    api.SearchModeLive,
 	})
 	doneModel, ok := updatedDone.(Model)
 	if !ok {
@@ -349,8 +417,8 @@ func TestLoadingDotsReset(t *testing.T) {
 
 func newTestModel() Model {
 	m := NewModel()
-	m.showIntro = false
-	m.introCompleted = true
+	m.intro.Show = false
+	m.intro.Completed = true
 	return m
 }
 

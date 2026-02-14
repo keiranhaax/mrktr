@@ -28,18 +28,18 @@ Bubble Tea TUI app following the **Elm Architecture (Model-View-Update)** for co
 - **`update.go`** — Processes all messages: keyboard input, window resize, API responses. Side effects (HTTP calls, `openURL`) are initiated here via `tea.Cmd`.
 - **`view.go`** — Pure rendering. Each panel has a `render*Panel(width, height int) string` method calling the shared `renderPanel()` helper. Layout is two-column (2/3 left, 1/3 right) joined with `lipgloss.JoinHorizontal/Vertical`.
 - **`styles.go`** — All Lip Gloss styles and the `renderPanel(title, content, width, height, active)` helper that handles active/inactive border states.
-- **`api.go`** — Search API integration with fallback chain and regex-based result parsing.
+- **`api/`** — Search providers, fallback chain, parser, and local query suggestion index.
 - **`main.go`** — Entry point. Creates `tea.NewProgram` with alt screen and mouse support.
 
 ### Panel focus system
 
-Five panels cycle via Tab/Shift+Tab using an `iota` enum (`panelSearch` through `panelHistory`). `updateFocus()` manages which `textinput.Model` has focus. Only `panelSearch` and `panelCalculator` accept text input; others respond to j/k navigation.
+Five panels cycle via Tab/Shift+Tab using an `iota` enum (`panelSearch` through `panelHistory`). `updateFocus()` manages which `textinput.Model` has focus. Only `panelSearch` and `panelCalculator` accept text input; others respond to j/k navigation. In the search panel, Tab first accepts inline suggestions when present.
 
-### API fallback chain (`api.go`)
+### API fallback chain (`api/search.go`)
 
-1. Firecrawl API (`FIRECRAWL_API_KEY`) — primary
-2. Tavily API (`TAVILY_API_KEY`) — fallback
-3. Mock data — demo mode when no keys are set
+1. Brave Search API (`BRAVE_API_KEY`) — primary
+2. Tavily API (`TAVILY_API_KEY`) — secondary provider
+3. Firecrawl (`FIRECRAWL_API_KEY`) — tertiary provider
 
 `parseSearchResults()` uses regex price extraction (`$X,XXX.XX`), URL-based platform detection, and keyword-based condition/status inference. New API providers should follow the same pattern: isolated function, gated on env var, returning `[]types.Listing`.
 
@@ -54,7 +54,7 @@ Extend types here before wiring into the model.
 
 ## Project Status
 
-The `api/`, `components/`, and `config/` directories exist but are empty — the planned refactoring from `plan.md` into separate packages hasn't happened yet. All production code lives in the `main` package plus `types/`.
+API providers now live in `api/` (`brave.go`, `tavily.go`, `firecrawl.go`) with shared client logic in `api/search.go`. Query suggestions/expansion live in `api/suggest.go` with embedded product data.
 
 ## Conventions
 
@@ -68,8 +68,9 @@ The `api/`, `components/`, and `config/` directories exist but are empty — the
 ## Environment Variables
 
 ```bash
-FIRECRAWL_API_KEY  # Primary search API
-TAVILY_API_KEY     # Fallback search API
+BRAVE_API_KEY      # Primary search API
+TAVILY_API_KEY     # Secondary search API
+FIRECRAWL_API_KEY  # Tertiary search API
 ```
 
-Without these, the app runs in demo mode with mock data — useful for UI work and deterministic testing.
+The app auto-loads `.env` from the `mrktr/` directory before creating the model.
