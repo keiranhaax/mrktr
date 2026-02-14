@@ -262,14 +262,14 @@ func renderPanel(icon, label, content string, width, height int, active, flashAc
 		height = 1
 	}
 
-	maxTitleWidth := width - 4
+	maxTitleWidth := width - 2
 	if maxTitleWidth < 1 {
 		maxTitleWidth = 1
 	}
 
 	styledTitle := renderPanelTitle(icon, label, tStyle, maxTitleWidth)
 	titleWidth := lipgloss.Width(styledTitle)
-	rightDashCount := max(0, width-titleWidth-3)
+	rightDashCount := max(0, width-titleWidth-1)
 	borderStyle := lipgloss.NewStyle().Foreground(borderColor)
 	topBorder := borderStyle.Render(leftCorner) + styledTitle + borderStyle.Render(strings.Repeat(dash, rightDashCount)+rightCorner)
 

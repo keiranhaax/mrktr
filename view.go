@@ -46,16 +46,20 @@ func (m Model) View() string {
 	searchHeight := 2
 	resultsHeight := max(4, m.height-layoutOverhead)
 	statsHeight := 6
-	calcHeight := 6
 	historyHeight := 2
 
+	// Derive calcHeight so left and right columns have equal total height.
+	// Each panel adds 2 lines of chrome (custom top border + bottom border).
+	leftTotal := (searchHeight + 2) + (resultsHeight + 2)
+	calcHeight := max(4, leftTotal-(statsHeight+2)-2)
+
 	// Render panels.
-	appHeader := m.renderAppHeader(contentWidth)
+	appHeader := m.renderAppHeader(m.width - 2)
 	searchPanel := m.renderSearchPanel(leftWidth, searchHeight)
 	resultsPanel := m.renderResultsPanel(leftWidth, resultsHeight)
 	statsPanel := m.renderStatsPanel(rightWidth, statsHeight)
 	calcPanel := m.renderCalculatorPanel(rightWidth, calcHeight)
-	historyPanel := m.renderHistoryPanel(m.width-4, historyHeight)
+	historyPanel := m.renderHistoryPanel(m.width-2, historyHeight)
 	helpBar := m.renderHelpBar()
 
 	// Compose left column.
