@@ -42,11 +42,16 @@ func (m Model) View() string {
 
 	searchHeight := 2
 	resultsHeight := max(4, m.height-layoutOverhead)
-	statsHeight := 6
 	historyHeight := 2
 
 	leftTotal := (searchHeight + 2) + (resultsHeight + 2)
-	calcHeight := max(4, leftTotal-(statsHeight+2)-2)
+	const (
+		calcMinHeight  = 4
+		statsMinHeight = 6
+		statsMaxHeight = 9
+	)
+	statsHeight := min(statsMaxHeight, max(statsMinHeight, leftTotal-(calcMinHeight+4)))
+	calcHeight := max(calcMinHeight, leftTotal-(statsHeight+2)-2)
 
 	appHeader := m.renderAppHeader(m.width - 2)
 	searchPanel := m.renderSearchPanel(leftWidth, searchHeight)

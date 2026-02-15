@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"mrktr/api"
-	"mrktr/types"
+	"mrktr/idea"
 	"net/url"
 	"os/exec"
 	"runtime"
@@ -108,24 +108,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.results) == 0 {
 			return m, nil
 		}
-		const totalStatsLines = 6
-		if m.statsReveal.Revealed >= totalStatsLines {
+		targetLines := m.statsRevealTargetLines()
+		if m.statsReveal.Revealed >= targetLines {
 			return m, nil
 		}
 		m.statsReveal.Revealed++
-		if m.statsReveal.Revealed >= totalStatsLines {
+		if m.statsReveal.Revealed >= targetLines {
 			return m, nil
 		}
 		gen := m.statsReveal.Gen
-		return m, tea.Tick(30*time.Millisecond, func(time.Time) tea.Msg {
+		return m, tea.Tick(m.statsRevealTickDuration(), func(time.Time) tea.Msg {
 			return statsRevealTickMsg{gen: gen}
 		})
+
+	case statsValueTickMsg:
+		if msg.gen != m.statsAnim.ValueTweenGen {
+			return m, nil
+		}
+
+		if m.statsAnim.ValueTweenOn {
+			m.statsAnim.ValueStep++
+			if m.statsAnim.ValueStep >= m.statsAnim.ValueSteps {
+				m.statsAnim.ValueStep = m.statsAnim.ValueSteps
+				m.statsAnim.ValueTweenOn = false
+			}
+		}
+
+		if m.statsAnim.DeltaTicks > 0 {
+			m.statsAnim.DeltaTicks--
+		}
+
+		if m.statsAnim.ValueTweenOn || m.statsAnim.DeltaTicks > 0 {
+			gen := m.statsAnim.ValueTweenGen
+			return m, tea.Tick(33*time.Millisecond, func(time.Time) tea.Msg {
+				return statsValueTickMsg{gen: gen}
+			})
+		}
+		return m, nil
 
 	case spinner.TickMsg:
 		if m.loading {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			m.loadingDots = (m.loadingDots + 1) % 4
+			if !m.reduceMotion {
+				m.statsAnim.SkeletonFrame++
+			}
 			return m, cmd
 		}
 		return m, nil
@@ -155,11 +183,17 @@ func (m Model) handleSearchResults(msg SearchResultsMsg) (tea.Model, tea.Cmd) {
 		m.reveal.Revealing = false
 		m.reveal.Rows = 0
 		m.statsReveal.Revealed = 0
+		m.statsAnim.ValueTweenOn = false
+		m.statsAnim.ValueStep = 0
+		m.statsAnim.ValueSteps = 0
+		m.statsAnim.DeltaTicks = 0
 		return m, nil
 	}
 
+	prevStats := m.extendedStats
 	m.results = msg.Results
-	m.stats = types.CalculateStats(m.results)
+	m.extendedStats = idea.CalculateExtendedStats(m.results)
+	m.stats = m.extendedStats.Statistics
 	m.selectedIndex = 0
 	m.resultsOffset = 0
 	m.err = nil
@@ -167,23 +201,59 @@ func (m Model) handleSearchResults(msg SearchResultsMsg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	if len(m.results) > 0 {
 		m.reveal.Gen++
-		m.reveal.Rows = 0
-		m.reveal.Revealing = true
-		revealGen := m.reveal.Gen
-		cmds = append(cmds, tea.Tick(30*time.Millisecond, func(time.Time) tea.Msg {
-			return revealRowTickMsg{gen: revealGen}
-		}))
-
 		m.statsReveal.Gen++
-		m.statsReveal.Revealed = 0
-		statsGen := m.statsReveal.Gen
-		cmds = append(cmds, tea.Tick(30*time.Millisecond, func(time.Time) tea.Msg {
-			return statsRevealTickMsg{gen: statsGen}
-		}))
+		if m.reduceMotion {
+			m.reveal.Rows = min(len(m.results), m.visibleResultRows())
+			m.reveal.Revealing = false
+			m.statsReveal.Revealed = m.statsRevealTargetLines()
+		} else {
+			m.reveal.Rows = 0
+			m.reveal.Revealing = true
+			revealGen := m.reveal.Gen
+			cmds = append(cmds, tea.Tick(30*time.Millisecond, func(time.Time) tea.Msg {
+				return revealRowTickMsg{gen: revealGen}
+			}))
+
+			m.statsReveal.Revealed = 0
+			statsGen := m.statsReveal.Gen
+			cmds = append(cmds, tea.Tick(m.statsRevealTickDuration(), func(time.Time) tea.Msg {
+				return statsRevealTickMsg{gen: statsGen}
+			}))
+		}
+
+		m.statsAnim.ValueTweenOn = false
+		m.statsAnim.ValueStep = 0
+		m.statsAnim.ValueSteps = 0
+		m.statsAnim.DeltaTicks = 0
+
+		if prevStats.Count > 0 && !m.reduceMotion {
+			m.statsAnim.FromStats = prevStats
+			m.statsAnim.ToStats = m.extendedStats
+			m.statsAnim.ValueTweenOn = true
+			m.statsAnim.ValueStep = 0
+			m.statsAnim.ValueSteps = 15
+			m.statsAnim.DeltaTotal = 24
+			m.statsAnim.DeltaTicks = m.statsAnim.DeltaTotal
+			m.statsAnim.DeltaMin = m.extendedStats.Min - prevStats.Min
+			m.statsAnim.DeltaMax = m.extendedStats.Max - prevStats.Max
+			m.statsAnim.DeltaAvg = m.extendedStats.Average - prevStats.Average
+			m.statsAnim.DeltaMedian = m.extendedStats.Median - prevStats.Median
+			m.statsAnim.DeltaP25 = m.extendedStats.P25 - prevStats.P25
+			m.statsAnim.DeltaP75 = m.extendedStats.P75 - prevStats.P75
+			m.statsAnim.ValueTweenGen++
+			valueGen := m.statsAnim.ValueTweenGen
+			cmds = append(cmds, tea.Tick(33*time.Millisecond, func(time.Time) tea.Msg {
+				return statsValueTickMsg{gen: valueGen}
+			}))
+		}
 	} else {
 		m.reveal.Revealing = false
 		m.reveal.Rows = 0
 		m.statsReveal.Revealed = 0
+		m.statsAnim.ValueTweenOn = false
+		m.statsAnim.ValueStep = 0
+		m.statsAnim.ValueSteps = 0
+		m.statsAnim.DeltaTicks = 0
 	}
 
 	if len(cmds) > 0 {
@@ -209,6 +279,10 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cancelActiveSearch()
 			return m, tea.Quit
 		}
+
+	case key.Matches(msg, m.keys.ToggleAnim):
+		m = m.toggleReduceMotion()
+		return m, nil
 
 	case key.Matches(msg, m.keys.Tab):
 		// Prioritize textinput autocomplete in search panel before global focus cycling.
@@ -245,6 +319,8 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleSearchKeys(msg)
 	case panelResults:
 		return m.handleResultsKeys(msg)
+	case panelStats:
+		return m.handleStatsKeys(msg)
 	case panelCalculator:
 		return m.handleCalculatorKeys(msg)
 	case panelHistory:
@@ -252,6 +328,85 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m Model) handleStatsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.StatsSum):
+		return m.changeStatsViewMode(idea.StatsViewSummary)
+	case key.Matches(msg, m.keys.StatsDist):
+		return m.changeStatsViewMode(idea.StatsViewDistribution)
+	case key.Matches(msg, m.keys.StatsMkt):
+		return m.changeStatsViewMode(idea.StatsViewMarket)
+	default:
+		return m, nil
+	}
+}
+
+func (m Model) toggleReduceMotion() Model {
+	m.reduceMotion = !m.reduceMotion
+	if !m.reduceMotion {
+		return m
+	}
+
+	// Snap every animation channel to a stable resting state immediately.
+	m.focusFlash.Gen++
+	m.focusFlash.Active = false
+	m.focusFlash.Ticks = 0
+
+	m.reveal.Gen++
+	m.reveal.Revealing = false
+	if len(m.results) > 0 {
+		m.reveal.Rows = min(len(m.results), m.visibleResultRows())
+	} else {
+		m.reveal.Rows = 0
+	}
+
+	m.statsReveal.Gen++
+	if len(m.results) > 0 {
+		m.statsReveal.Revealed = m.statsRevealTargetLines()
+	} else {
+		m.statsReveal.Revealed = 0
+	}
+
+	m.statsAnim.ValueTweenGen++
+	m.statsAnim.ValueTweenOn = false
+	m.statsAnim.ValueStep = 0
+	m.statsAnim.ValueSteps = 0
+	m.statsAnim.DeltaTicks = 0
+	m.statsAnim.DeltaTotal = 0
+	m.statsAnim.DeltaMin = 0
+	m.statsAnim.DeltaMax = 0
+	m.statsAnim.DeltaAvg = 0
+	m.statsAnim.DeltaMedian = 0
+	m.statsAnim.DeltaP25 = 0
+	m.statsAnim.DeltaP75 = 0
+
+	return m
+}
+
+func (m Model) changeStatsViewMode(mode idea.StatsViewMode) (tea.Model, tea.Cmd) {
+	if m.statsViewMode == mode {
+		return m, nil
+	}
+
+	m.statsViewMode = mode
+	if len(m.results) == 0 {
+		m.statsReveal.Revealed = 0
+		return m, nil
+	}
+
+	m.statsReveal.Gen++
+	if m.reduceMotion {
+		m.statsReveal.Revealed = m.statsRevealTargetLines()
+		return m, nil
+	}
+	m.statsReveal.Revealed = 0
+	statsGen := m.statsReveal.Gen
+
+	return m, tea.Tick(m.statsRevealTickDuration(), func(time.Time) tea.Msg {
+		return statsRevealTickMsg{gen: statsGen}
+	})
 }
 
 func (m Model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -377,6 +532,11 @@ func (m Model) changeFocus(newPanel int) (tea.Model, tea.Cmd) {
 	m.focusedPanel = newPanel
 	m = m.updateFocus()
 	m.focusFlash.Gen++
+	if m.reduceMotion {
+		m.focusFlash.Ticks = 0
+		m.focusFlash.Active = false
+		return m, nil
+	}
 	m.focusFlash.Ticks = 3
 	m.focusFlash.Active = true
 	gen := m.focusFlash.Gen
@@ -515,6 +675,11 @@ func (m Model) startSearch(rawQuery string, addToHistory bool) (tea.Model, tea.C
 
 	m.loading = true
 	m.loadingDots = 0
+	m.statsAnim.SkeletonFrame = 0
+	m.statsAnim.ValueTweenOn = false
+	m.statsAnim.ValueStep = 0
+	m.statsAnim.ValueSteps = 0
+	m.statsAnim.DeltaTicks = 0
 	m.warning = ""
 	m.err = nil
 	if addToHistory {
@@ -597,4 +762,40 @@ func openURL(rawURL string) error {
 		return nil
 	}
 	return fmt.Errorf("open URL: unsupported platform %q", runtime.GOOS)
+}
+
+func (m Model) statsRevealTargetLines() int {
+	switch m.statsViewMode {
+	case idea.StatsViewDistribution:
+		stats := m.extendedStats
+		if len(stats.Histogram) == 0 {
+			return 2
+		}
+		bins := len(stats.Histogram)
+		if bins > 6 {
+			bins = 6
+		}
+		return bins + 1
+	case idea.StatsViewMarket:
+		stats := m.extendedStats
+		if len(stats.PlatformStats) == 0 {
+			return 2
+		}
+		platformLines := len(stats.PlatformStats)
+		if platformLines > 4 {
+			platformLines = 4
+		}
+		return platformLines + 2
+	default:
+		return 6
+	}
+}
+
+func (m Model) statsRevealTickDuration() time.Duration {
+	switch m.statsViewMode {
+	case idea.StatsViewDistribution, idea.StatsViewMarket:
+		return 20 * time.Millisecond
+	default:
+		return 40 * time.Millisecond
+	}
 }

@@ -7,6 +7,10 @@ type keyMap struct {
 	ForceQuit  key.Binding
 	Tab        key.Binding
 	ShiftTab   key.Binding
+	StatsSum   key.Binding
+	StatsDist  key.Binding
+	StatsMkt   key.Binding
+	ToggleAnim key.Binding
 	Search     key.Binding
 	Calculator key.Binding
 	Escape     key.Binding
@@ -34,6 +38,22 @@ func defaultKeyMap() keyMap {
 		ShiftTab: key.NewBinding(
 			key.WithKeys("shift+tab"),
 			key.WithHelp("shift+tab", "prev panel"),
+		),
+		StatsSum: key.NewBinding(
+			key.WithKeys("1"),
+			key.WithHelp("1", "sum view"),
+		),
+		StatsDist: key.NewBinding(
+			key.WithKeys("2"),
+			key.WithHelp("2", "dist view"),
+		),
+		StatsMkt: key.NewBinding(
+			key.WithKeys("3"),
+			key.WithHelp("3", "market view"),
+		),
+		ToggleAnim: key.NewBinding(
+			key.WithKeys("m"),
+			key.WithHelp("m", "motion"),
 		),
 		Search: key.NewBinding(
 			key.WithKeys("/"),
@@ -71,13 +91,14 @@ func defaultKeyMap() keyMap {
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Search, k.Enter, k.Down, k.Tab, k.Calculator, k.Quit}
+	return []key.Binding{k.Search, k.Enter, k.Down, k.Tab, k.ToggleAnim, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Search, k.Enter, k.Escape},
 		{k.Down, k.Up, k.HistNext, k.HistPrev},
-		{k.Tab, k.ShiftTab, k.Calculator, k.Quit, k.ForceQuit},
+		{k.StatsSum, k.StatsDist, k.StatsMkt, k.Tab, k.ShiftTab, k.ToggleAnim},
+		{k.Calculator, k.Quit, k.ForceQuit},
 	}
 }

@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"mrktr/api"
+	"mrktr/idea"
 	"mrktr/types"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -51,6 +54,25 @@ type StatsReveal struct {
 	Gen      int
 }
 
+// StatsPanelAnimation groups future stats-panel animation state.
+type StatsPanelAnimation struct {
+	SkeletonFrame int
+	ValueTweenGen int
+	ValueTweenOn  bool
+	ValueStep     int
+	ValueSteps    int
+	DeltaTicks    int
+	DeltaTotal    int
+	FromStats     idea.ExtendedStatistics
+	ToStats       idea.ExtendedStatistics
+	DeltaMin      float64
+	DeltaMax      float64
+	DeltaAvg      float64
+	DeltaMedian   float64
+	DeltaP25      float64
+	DeltaP75      float64
+}
+
 // Model represents the application state.
 type Model struct {
 	// Terminal dimensions
@@ -78,6 +100,8 @@ type Model struct {
 	selectedIndex int
 	resultsOffset int
 	stats         types.Statistics
+	extendedStats idea.ExtendedStatistics
+	statsViewMode idea.StatsViewMode
 
 	// Profit calculator
 	costInput textinput.Model
@@ -88,12 +112,13 @@ type Model struct {
 	historyIndex int
 
 	// State
-	loading     bool
-	loadingDots int
-	spinner     spinner.Model
-	err         error
-	dataMode    api.SearchMode
-	warning     string
+	loading      bool
+	loadingDots  int
+	reduceMotion bool
+	spinner      spinner.Model
+	err          error
+	dataMode     api.SearchMode
+	warning      string
 
 	// API
 	apiClient *api.Client
@@ -106,6 +131,7 @@ type Model struct {
 	focusFlash  FocusFlash
 	reveal      RevealAnim
 	statsReveal StatsReveal
+	statsAnim   StatsPanelAnimation
 }
 
 // NewModel creates a new application model with initial state.
@@ -139,17 +165,20 @@ func NewModel() Model {
 	hp.Styles.FullSeparator = separatorStyle
 
 	return Model{
-		keys:         defaultKeyMap(),
-		help:         hp,
-		intro:        IntroAnimation{Show: true},
-		focusedPanel: panelSearch,
-		searchInput:  si,
-		productIndex: api.NewProductIndex(),
-		costInput:    ci,
-		spinner:      sp,
-		results:      []types.Listing{},
-		history:      []string{},
-		apiClient:    api.NewEnvClient(),
+		keys:          defaultKeyMap(),
+		help:          hp,
+		intro:         IntroAnimation{Show: true},
+		focusedPanel:  panelSearch,
+		searchInput:   si,
+		productIndex:  api.NewProductIndex(),
+		costInput:     ci,
+		spinner:       sp,
+		results:       []types.Listing{},
+		statsViewMode: idea.StatsViewSummary,
+		extendedStats: idea.CalculateExtendedStats(nil),
+		reduceMotion:  shouldReduceMotionFromEnv(),
+		history:       []string{},
+		apiClient:     api.NewEnvClient(),
 	}
 }
 
@@ -195,4 +224,22 @@ type statsRevealTickMsg struct {
 	gen int
 }
 
+type statsValueTickMsg struct {
+	gen int
+}
+
 type introTickMsg struct{}
+
+func shouldReduceMotionFromEnv() bool {
+	return parseBoolishEnv(os.Getenv("MRKTR_LOW_POWER")) ||
+		parseBoolishEnv(os.Getenv("MRKTR_REDUCE_MOTION"))
+}
+
+func parseBoolishEnv(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
