@@ -622,6 +622,8 @@ func TestGlobalMotionToggleFlipsSetting(t *testing.T) {
 
 func TestGlobalMotionToggleSettlesInFlightAnimations(t *testing.T) {
 	m := newTestModel()
+	m.focusedPanel = panelResults
+	m = m.updateFocus()
 	m.results = makeListings(10)
 	m.extendedStats = idea.CalculateExtendedStats(m.results)
 	m.stats = m.extendedStats.Statistics
@@ -680,7 +682,7 @@ func TestGlobalMotionToggleSettlesInFlightAnimations(t *testing.T) {
 	}
 }
 
-func TestGlobalMotionToggleOverridesSearchInputRune(t *testing.T) {
+func TestGlobalMotionToggleDoesNotOverrideSearchInputRune(t *testing.T) {
 	m := newTestModel()
 	m.focusedPanel = panelSearch
 	m = m.updateFocus()
@@ -691,11 +693,11 @@ func TestGlobalMotionToggleOverridesSearchInputRune(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected model type %T, got %T", m, updated)
 	}
-	if !um.reduceMotion {
-		t.Fatal("expected m key to toggle motion globally from search panel")
+	if um.reduceMotion {
+		t.Fatal("expected search input to keep literal m behavior without toggling motion")
 	}
-	if got := um.searchInput.Value(); got != "" {
-		t.Fatalf("expected m key to not type into search input, got %q", got)
+	if got := um.searchInput.Value(); got != "m" {
+		t.Fatalf("expected m key to type into search input, got %q", got)
 	}
 }
 

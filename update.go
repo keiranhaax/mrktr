@@ -269,6 +269,14 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Let text inputs accept literal "m". Use motion toggle from non-input panels.
+	if key.Matches(msg, m.keys.ToggleAnim) &&
+		m.focusedPanel != panelSearch &&
+		m.focusedPanel != panelCalculator {
+		m = m.toggleReduceMotion()
+		return m, nil
+	}
+
 	switch {
 	case key.Matches(msg, m.keys.ForceQuit):
 		m.cancelActiveSearch()
@@ -279,10 +287,6 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cancelActiveSearch()
 			return m, tea.Quit
 		}
-
-	case key.Matches(msg, m.keys.ToggleAnim):
-		m = m.toggleReduceMotion()
-		return m, nil
 
 	case key.Matches(msg, m.keys.Tab):
 		// Prioritize textinput autocomplete in search panel before global focus cycling.
