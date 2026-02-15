@@ -146,14 +146,21 @@ func TestHistoryEnterReplaysSelectedQuery(t *testing.T) {
 	}
 }
 
-func TestResultsEnterReturnsOpenURLCommand(t *testing.T) {
+func TestResultsEnterOpensDetailOverlay(t *testing.T) {
 	m := newTestModel()
 	m.focusedPanel = panelResults
 	m.results = []types.Listing{{URL: "https://example.com"}}
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("expected open URL command when enter is pressed on a result")
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	um, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", m, updated)
+	}
+	if cmd != nil {
+		t.Fatal("expected no command when entering detail overlay")
+	}
+	if !um.detailOpen {
+		t.Fatal("expected detail overlay to open on enter")
 	}
 }
 
@@ -1116,6 +1123,30 @@ func TestStartingNewSearchCancelsPreviousAndIgnoresStaleResults(t *testing.T) {
 	}
 	if afterStale.loading != doneModel.loading || len(afterStale.results) != len(doneModel.results) || afterStale.err != doneModel.err {
 		t.Fatal("expected stale search result message to be ignored")
+	}
+}
+
+func TestSortFilterStatsConsistency(t *testing.T) {
+	m := newTestModel()
+	m.rawResults = []types.Listing{
+		{Platform: "eBay", Price: 190, Condition: "Used", Status: "Active"},
+		{Platform: "Mercari", Price: 210, Condition: "New", Status: "Active"},
+		{Platform: "eBay", Price: 160, Condition: "Good", Status: "Sold"},
+	}
+	m.sortField = types.SortFieldPrice
+	m.sortDirection = types.SortDirectionAsc
+	m.resultFilter = types.ResultFilter{Platform: "eBay"}
+
+	m.applySortAndFilter()
+
+	if len(m.results) != 2 {
+		t.Fatalf("expected 2 filtered results, got %d", len(m.results))
+	}
+	if m.results[0].Price != 160 || m.results[1].Price != 190 {
+		t.Fatalf("expected price-sorted filtered results, got %+v", m.results)
+	}
+	if m.stats.Count != 2 || m.extendedStats.Count != 2 {
+		t.Fatalf("expected stats to match filtered count, stats=%d extended=%d", m.stats.Count, m.extendedStats.Count)
 	}
 }
 

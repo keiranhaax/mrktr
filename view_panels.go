@@ -6,6 +6,7 @@ import (
 	"mrktr/idea"
 	"mrktr/types"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -24,13 +25,22 @@ func (m Model) renderSearchPanel(width, height int) string {
 func (m Model) renderResultsPanel(width, height int) string {
 	active := m.focusedPanel == panelResults
 	flashActive := active && m.focusFlash.Active
+	title := m.resultsPanelTitle()
+
+	if m.detailOpen {
+		content := m.renderDetailOverlay(width)
+		return renderPanel("#", title, content, width, height, active, flashActive)
+	}
 
 	if len(m.results) == 0 {
 		content := emptyStyle.Render("~ No results yet ~") + "\n" + keyStyle.Render("/") + keyDescStyle.Render(" search")
-		return renderPanel("#", "Results", content, width, height, active, flashActive)
+		if m.filterBarActive {
+			content = m.renderFilterBar() + "\n" + content
+		}
+		return renderPanel("#", title, content, width, height, active, flashActive)
 	}
 
-	visibleRows := m.visibleResultRows()
+	visibleRows := m.visibleResultRowsForList()
 	if m.reveal.Revealing {
 		visibleRows = min(visibleRows, m.reveal.Rows)
 		if visibleRows < 0 {
@@ -56,16 +66,26 @@ func (m Model) renderResultsPanel(width, height int) string {
 		colCondition = 10
 		colStatus    = 8
 	)
+	showCondition := width >= 90
+	showStatus := width >= 80
 
 	var lines []string
-	header := fmt.Sprintf("%-*s %-*s %-*s %*s  %-*s %-*s",
+	if m.filterBarActive {
+		lines = append(lines, m.renderFilterBar())
+	}
+
+	header := fmt.Sprintf("%-*s %-*s %-*s %*s",
 		colCursor, "",
 		colNum, "#",
-		colPlatform, "Platform",
-		colPrice, "Price",
-		colCondition, "Condition",
-		colStatus, "Status",
+		colPlatform, m.sortColumnLabel("Platform", types.SortFieldPlatform),
+		colPrice, m.sortColumnLabel("Price", types.SortFieldPrice),
 	)
+	if showCondition {
+		header += fmt.Sprintf("  %-*s", colCondition, m.sortColumnLabel("Condition", types.SortFieldCondition))
+	}
+	if showStatus {
+		header += fmt.Sprintf(" %-*s", colStatus, m.sortColumnLabel("Status", types.SortFieldStatus))
+	}
 	lines = append(lines, headerStyle.Render(header))
 
 	for i := start; i < end; i++ {
@@ -82,23 +102,26 @@ func (m Model) renderResultsPanel(width, height int) string {
 
 		platformCell := platformStyleFor(r.Platform).Render(fmt.Sprintf("%-*s", colPlatform, platformRaw))
 		priceCell := priceStyle.Render(fmt.Sprintf("%*s", colPrice, price))
-		conditionCell := fmt.Sprintf("%-*s", colCondition, cond)
-
-		row := fmt.Sprintf("%-*s %*d %s %s  %s ",
+		row := fmt.Sprintf("%-*s %*d %s %s",
 			colCursor, cursor,
 			colNum, i+1,
 			platformCell,
 			priceCell,
-			conditionCell,
 		)
-
-		var statusStyled string
-		if status == "Sold" {
-			statusStyled = soldStyle.Render(fmt.Sprintf("%-*s", colStatus, status))
-		} else {
-			statusStyled = activeStyle.Render(fmt.Sprintf("%-*s", colStatus, status))
+		if showCondition {
+			conditionCell := fmt.Sprintf("  %-*s", colCondition, cond)
+			row += conditionCell
 		}
-		row += statusStyled
+
+		if showStatus {
+			var statusStyled string
+			if status == "Sold" {
+				statusStyled = soldStyle.Render(fmt.Sprintf(" %-*s", colStatus, status))
+			} else {
+				statusStyled = activeStyle.Render(fmt.Sprintf(" %-*s", colStatus, status))
+			}
+			row += statusStyled
+		}
 
 		if i == m.selectedIndex && active {
 			row = selectedStyle.Render(row)
@@ -113,14 +136,14 @@ func (m Model) renderResultsPanel(width, height int) string {
 
 	if visibleRows == 0 {
 		lines = append(lines, scrollInfoStyle.Render("revealing..."))
-	} else if len(m.results) > m.visibleResultRows() {
+	} else if len(m.results) > m.visibleResultRowsForList() {
 		lines = append(lines, scrollInfoStyle.Render(fmt.Sprintf("showing %d-%d of %d", start+1, end, len(m.results))))
 	} else {
 		lines = append(lines, scrollInfoStyle.Render(fmt.Sprintf("showing 1-%d of %d", end, len(m.results))))
 	}
 
 	content := strings.Join(lines, "\n")
-	return renderPanel("#", "Results", content, width, height, active, flashActive)
+	return renderPanel("#", title, content, width, height, active, flashActive)
 }
 
 func (m Model) renderStatsPanel(width, height int) string {
@@ -344,34 +367,45 @@ func (m Model) renderCalculatorPanel(width, height int) string {
 
 	lines := []string{
 		labelStyle.Render("Your Cost:") + " $" + m.costInput.View(),
+		labelStyle.Render("Platform:") + " " + valueStyle.Render(m.calcPlatform) + " " + mutedStyle.Render("[p cycle]"),
 	}
 
 	if m.cost > 0 && len(m.results) > 0 {
 		lines = append(lines, separatorStyle.Render(strings.Repeat("╌", max(12, width-8))))
 
-		avgProfit := types.CalculateProfit(m.cost, m.stats.Average)
-		minProfit := types.CalculateProfit(m.cost, m.stats.Min)
-		maxProfit := types.CalculateProfit(m.cost, m.stats.Max)
-		maxProfitMagnitude := maxAbs(avgProfit.Profit, minProfit.Profit, maxProfit.Profit)
+		avgNet, avgFee, avgPct := types.CalculateNetProfit(m.cost, m.stats.Average, m.calcPlatform)
+		minNet, minFee, minPct := types.CalculateNetProfit(m.cost, m.stats.Min, m.calcPlatform)
+		maxNet, maxFee, maxPct := types.CalculateNetProfit(m.cost, m.stats.Max, m.calcPlatform)
+		maxProfitMagnitude := maxAbs(avgNet, minNet, maxNet)
 		barWidth := max(8, min(18, width/3))
 
 		lines = append(lines, fmt.Sprintf("%s %s (%s) %s",
 			labelStyle.Render("At Avg:"),
-			formatProfit(avgProfit.Profit),
-			formatPercent(avgProfit.ProfitPercent),
-			renderProfitBar(avgProfit.Profit, maxProfitMagnitude, barWidth),
+			formatProfit(avgNet),
+			formatPercent(avgPct),
+			renderProfitBar(avgNet, maxProfitMagnitude, barWidth),
 		))
+		lines = append(lines, mutedStyle.Render(fmt.Sprintf("  after %s fees: -$%.2f", m.calcPlatform, avgFee)))
 		lines = append(lines, fmt.Sprintf("%s %s (%s) %s",
 			labelStyle.Render("At Min:"),
-			formatProfit(minProfit.Profit),
-			formatPercent(minProfit.ProfitPercent),
-			renderProfitBar(minProfit.Profit, maxProfitMagnitude, barWidth),
+			formatProfit(minNet),
+			formatPercent(minPct),
+			renderProfitBar(minNet, maxProfitMagnitude, barWidth),
 		))
+		lines = append(lines, mutedStyle.Render(fmt.Sprintf("  after %s fees: -$%.2f", m.calcPlatform, minFee)))
 		lines = append(lines, fmt.Sprintf("%s %s (%s) %s",
 			labelStyle.Render("At Max:"),
-			formatProfit(maxProfit.Profit),
-			formatPercent(maxProfit.ProfitPercent),
-			renderProfitBar(maxProfit.Profit, maxProfitMagnitude, barWidth),
+			formatProfit(maxNet),
+			formatPercent(maxPct),
+			renderProfitBar(maxNet, maxProfitMagnitude, barWidth),
+		))
+		lines = append(lines, mutedStyle.Render(fmt.Sprintf("  after %s fees: -$%.2f", m.calcPlatform, maxFee)))
+
+		bestPlatform, bestNet := m.bestNetPlatform(m.cost, m.stats.Average)
+		lines = append(lines, fmt.Sprintf("%s %s %s",
+			labelStyle.Render("Best Net @ Avg:"),
+			valueStyle.Render(bestPlatform),
+			formatProfit(bestNet),
 		))
 	} else {
 		lines = append(lines, emptyStyle.Render("~ Enter cost to see profits ~"))
@@ -404,9 +438,23 @@ func (m Model) renderHistoryPanel(width, height int) string {
 
 	end := min(len(m.history), start+maxItems)
 	items := m.history[start:end]
+	now := time.Now()
 	rendered := make([]string, len(items))
 	for i, item := range items {
-		label := truncate(item, 18)
+		entry := m.historyMeta[strings.ToLower(item)]
+		age := formatRelativeTime(entry.Timestamp, now)
+		label := truncate(item, 12)
+		meta := age
+		if entry.ResultCount > 0 {
+			if meta == "" {
+				meta = fmt.Sprintf("%d", entry.ResultCount)
+			} else {
+				meta = fmt.Sprintf("%s, %d", age, entry.ResultCount)
+			}
+		}
+		if meta != "" {
+			label = fmt.Sprintf("%s (%s)", label, meta)
+		}
 		selected := start+i == m.historyIndex
 		if selected {
 			marker := "> " + label
@@ -429,6 +477,9 @@ func (m Model) renderHelpBar() string {
 	helpModel.Width = max(0, m.width-2)
 	help := helpModel.View(m.keys)
 
+	if m.statusFlash != "" {
+		help = successStyle.Render(m.statusFlash) + "  " + help
+	}
 	if m.dataMode != "" {
 		help = renderModeBadge(m.dataMode) + "  " + help
 	}
@@ -441,4 +492,90 @@ func (m Model) renderHelpBar() string {
 	}
 
 	return helpStyle.Render(help)
+}
+
+func (m Model) resultsPanelTitle() string {
+	parts := make([]string, 0, 3)
+	if strings.TrimSpace(m.resultFilter.Platform) != "" {
+		parts = append(parts, m.resultFilter.Platform)
+	}
+	if strings.TrimSpace(m.resultFilter.Condition) != "" {
+		parts = append(parts, m.resultFilter.Condition)
+	}
+	if strings.TrimSpace(m.resultFilter.Status) != "" {
+		parts = append(parts, m.resultFilter.Status)
+	}
+	if len(parts) == 0 {
+		return "Results"
+	}
+	return fmt.Sprintf("Results (%s)", strings.Join(parts, ", "))
+}
+
+func (m Model) renderFilterBar() string {
+	platform := m.resultFilter.Platform
+	if strings.TrimSpace(platform) == "" {
+		platform = "All"
+	}
+	condition := m.resultFilter.Condition
+	if strings.TrimSpace(condition) == "" {
+		condition = "All"
+	}
+	status := m.resultFilter.Status
+	if strings.TrimSpace(status) == "" {
+		status = "All"
+	}
+	return mutedStyle.Render(
+		fmt.Sprintf(
+			"[f] Filters  [p] %s  [n/u] %s  [a] %s  [esc] close",
+			platform,
+			condition,
+			status,
+		),
+	)
+}
+
+func (m Model) sortColumnLabel(label string, field types.SortField) string {
+	if m.sortField != field {
+		return label
+	}
+	if m.sortDirection == types.SortDirectionDesc {
+		return label + " ▼"
+	}
+	return label + " ▲"
+}
+
+func (m Model) renderDetailOverlay(width int) string {
+	selected, ok := m.selectedListing()
+	if !ok {
+		return emptyStyle.Render("~ No selection ~")
+	}
+
+	urlWidth := max(16, width-14)
+	lines := []string{
+		activeTitleStyle.Render("Detail View"),
+		separatorStyle.Render(strings.Repeat("╌", max(12, width-8))),
+		fmt.Sprintf("%s %s", labelStyle.Render("Title:"), selected.Title),
+		fmt.Sprintf("%s %s", labelStyle.Render("Platform:"), selected.Platform),
+		fmt.Sprintf("%s $%.2f", labelStyle.Render("Price:"), selected.Price),
+		fmt.Sprintf("%s %s", labelStyle.Render("Condition:"), selected.Condition),
+		fmt.Sprintf("%s %s", labelStyle.Render("Status:"), selected.Status),
+		fmt.Sprintf("%s %s", labelStyle.Render("URL:"), truncate(selected.URL, urlWidth)),
+		separatorStyle.Render(strings.Repeat("╌", max(12, width-8))),
+		mutedStyle.Render("[enter] open in browser  [esc] back"),
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m Model) bestNetPlatform(cost, sell float64) (string, float64) {
+	platforms := []string{"eBay", "Mercari", "Amazon", "Facebook"}
+	bestPlatform := platforms[0]
+	bestNet, _, _ := types.CalculateNetProfit(cost, sell, bestPlatform)
+	for _, platform := range platforms[1:] {
+		net, _, _ := types.CalculateNetProfit(cost, sell, platform)
+		if net > bestNet {
+			bestNet = net
+			bestPlatform = platform
+		}
+	}
+	return bestPlatform, bestNet
 }

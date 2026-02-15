@@ -28,30 +28,48 @@ func (m Model) View() string {
 	}
 
 	contentWidth := m.width - 4
+	stacked := m.width < 80
 	leftWidth := contentWidth * 2 / 3
 	rightWidth := contentWidth - leftWidth
 
-	if leftWidth < 24 {
-		leftWidth = 24
-		rightWidth = contentWidth - leftWidth
-	}
-	if rightWidth < 20 {
-		rightWidth = 20
-		leftWidth = contentWidth - rightWidth
+	if stacked {
+		leftWidth = contentWidth
+		rightWidth = contentWidth
+	} else {
+		if leftWidth < 24 {
+			leftWidth = 24
+			rightWidth = contentWidth - leftWidth
+		}
+		if rightWidth < 20 {
+			rightWidth = 20
+			leftWidth = contentWidth - rightWidth
+		}
 	}
 
 	searchHeight := 2
-	resultsHeight := max(4, m.height-layoutOverhead)
 	historyHeight := 2
+	resultsHeight := max(4, m.height-layoutOverhead)
 
-	leftTotal := (searchHeight + 2) + (resultsHeight + 2)
 	const (
 		calcMinHeight  = 4
 		statsMinHeight = 6
 		statsMaxHeight = 9
 	)
-	statsHeight := min(statsMaxHeight, max(statsMinHeight, leftTotal-(calcMinHeight+4)))
-	calcHeight := max(calcMinHeight, leftTotal-(statsHeight+2)-2)
+	statsHeight := statsMinHeight
+	calcHeight := calcMinHeight
+
+	if !stacked {
+		leftTotal := (searchHeight + 2) + (resultsHeight + 2)
+		statsHeight = min(statsMaxHeight, max(statsMinHeight, leftTotal-(calcMinHeight+4)))
+		calcHeight = max(calcMinHeight, leftTotal-(statsHeight+2)-2)
+	} else {
+		statsHeight = min(statsMaxHeight, max(statsMinHeight, m.height/4))
+		calcHeight = calcMinHeight
+		resultsHeight = max(
+			4,
+			m.height-((searchHeight+2)+(statsHeight+2)+(calcHeight+2)+(historyHeight+2)+5),
+		)
+	}
 
 	appHeader := m.renderAppHeader(m.width - 2)
 	searchPanel := m.renderSearchPanel(leftWidth, searchHeight)
@@ -73,11 +91,20 @@ func (m Model) View() string {
 		calcPanel,
 	)
 
-	mainArea := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		leftColumn,
-		rightColumn,
-	)
+	mainArea := ""
+	if stacked {
+		mainArea = lipgloss.JoinVertical(
+			lipgloss.Left,
+			leftColumn,
+			rightColumn,
+		)
+	} else {
+		mainArea = lipgloss.JoinHorizontal(
+			lipgloss.Top,
+			leftColumn,
+			rightColumn,
+		)
+	}
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,

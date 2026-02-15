@@ -96,29 +96,41 @@ type Model struct {
 	productIndex *api.ProductIndex
 
 	// Results
-	results       []types.Listing
-	selectedIndex int
-	resultsOffset int
-	stats         types.Statistics
-	extendedStats idea.ExtendedStatistics
-	statsViewMode idea.StatsViewMode
+	rawResults      []types.Listing
+	results         []types.Listing
+	selectedIndex   int
+	resultsOffset   int
+	sortField       types.SortField
+	sortDirection   types.SortDirection
+	resultFilter    types.ResultFilter
+	filterBarActive bool
+	detailOpen      bool
+	stats           types.Statistics
+	extendedStats   idea.ExtendedStatistics
+	statsViewMode   idea.StatsViewMode
 
 	// Profit calculator
-	costInput textinput.Model
-	cost      float64
+	costInput    textinput.Model
+	cost         float64
+	calcPlatform string
 
 	// History
 	history      []string
 	historyIndex int
+	historyMeta  map[string]HistoryEntry
+	historyStore HistoryStore
 
 	// State
-	loading      bool
-	loadingDots  int
-	reduceMotion bool
-	spinner      spinner.Model
-	err          error
-	dataMode     api.SearchMode
-	warning      string
+	loading        bool
+	loadingDots    int
+	reduceMotion   bool
+	spinner        spinner.Model
+	err            error
+	dataMode       api.SearchMode
+	warning        string
+	statusFlash    string
+	statusFlashGen int
+	lastQuery      string
 
 	// API
 	apiClient *api.Client
@@ -173,11 +185,18 @@ func NewModel() Model {
 		productIndex:  api.NewProductIndex(),
 		costInput:     ci,
 		spinner:       sp,
+		rawResults:    []types.Listing{},
 		results:       []types.Listing{},
+		sortField:     types.SortFieldPrice,
+		sortDirection: types.SortDirectionAsc,
+		resultFilter:  types.ResultFilter{},
+		calcPlatform:  "eBay",
 		statsViewMode: idea.StatsViewSummary,
 		extendedStats: idea.CalculateExtendedStats(nil),
 		reduceMotion:  shouldReduceMotionFromEnv(),
 		history:       []string{},
+		historyMeta:   map[string]HistoryEntry{},
+		historyStore:  NewFileHistoryStore(),
 		apiClient:     api.NewEnvClient(),
 	}
 }
@@ -187,6 +206,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		textinput.Blink,
 		m.spinner.Tick,
+		loadHistoryCmd(m.historyStore),
 		tea.Tick(40*time.Millisecond, func(time.Time) tea.Msg {
 			return introTickMsg{}
 		}),
@@ -195,7 +215,11 @@ func (m Model) Init() tea.Cmd {
 
 // visibleResultRows returns how many result rows fit in the results panel.
 func (m Model) visibleResultRows() int {
-	resultsHeight := max(4, m.height-layoutOverhead)
+	overhead := layoutOverhead
+	if m.width > 0 && m.width < 80 {
+		overhead += 8
+	}
+	resultsHeight := max(4, m.height-overhead)
 	return max(1, resultsHeight-2)
 }
 
@@ -210,6 +234,28 @@ type SearchResultsMsg struct {
 
 type openURLResultMsg struct {
 	Err error
+}
+
+type clipboardResultMsg struct {
+	Err error
+}
+
+type exportResultMsg struct {
+	Path string
+	Err  error
+}
+
+type historyLoadedMsg struct {
+	Entries []HistoryEntry
+	Err     error
+}
+
+type historySavedMsg struct {
+	Err error
+}
+
+type statusFlashClearMsg struct {
+	gen int
 }
 
 type focusFlashTickMsg struct {

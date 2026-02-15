@@ -77,11 +77,11 @@ func (p *TavilyProvider) Search(ctx context.Context, query string) ([]types.List
 		return nil, fmt.Errorf("read tavily response: %w", err)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf(
-			"tavily status %d: %s",
-			resp.StatusCode,
-			summarizeHTTPBody(body),
-		)
+		return nil, &HTTPStatusError{
+			Provider: "Tavily",
+			Status:   resp.StatusCode,
+			Body:     summarizeHTTPBody(body),
+		}
 	}
 
 	var result struct {

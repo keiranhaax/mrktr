@@ -148,6 +148,24 @@ func TestSearchPricesUnavailableWhenProvidersFail(t *testing.T) {
 	}
 }
 
+func TestSearchPricesActionableWarningsFromHTTPStatus(t *testing.T) {
+	client := NewClient(
+		stubProvider{name: "Brave", configured: true, err: &HTTPStatusError{Provider: "Brave", Status: 401, Body: "bad token"}},
+		stubProvider{name: "Tavily", configured: true, err: &HTTPStatusError{Provider: "Tavily", Status: 429, Body: "slow down"}},
+	)
+
+	resp := client.SearchPrices("ps5")
+	if resp.Mode != SearchModeUnavailable {
+		t.Fatalf("expected unavailable mode, got %q", resp.Mode)
+	}
+	if !strings.Contains(resp.Warning, "BRAVE_API_KEY") {
+		t.Fatalf("expected actionable auth warning, got %q", resp.Warning)
+	}
+	if !strings.Contains(resp.Warning, "Try again in 60s") {
+		t.Fatalf("expected actionable rate-limit warning, got %q", resp.Warning)
+	}
+}
+
 func TestSearchPricesSkipsUnconfiguredProviders(t *testing.T) {
 	client := NewClient(
 		stubProvider{name: "Brave", configured: false},

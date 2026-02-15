@@ -101,6 +101,7 @@ func (c *Client) SearchPricesContext(ctx context.Context, query string) SearchRe
 
 	var successfulProviders int
 	var failedProviders []string
+	var failedHints []string
 
 	tryProvider := func(provider SearchProvider) *SearchResponse {
 		if provider == nil || !provider.Configured() {
@@ -114,6 +115,9 @@ func (c *Client) SearchPricesContext(ctx context.Context, query string) SearchRe
 				name = "Provider"
 			}
 			failedProviders = append(failedProviders, name)
+			if hint := actionableProviderError(name, err); hint != "" {
+				failedHints = append(failedHints, hint)
+			}
 			return nil
 		}
 
@@ -136,7 +140,9 @@ func (c *Client) SearchPricesContext(ctx context.Context, query string) SearchRe
 	}
 
 	warning := "Live search unavailable."
-	if len(failedProviders) > 0 {
+	if len(failedHints) > 0 {
+		warning = strings.Join(failedHints, " ")
+	} else if len(failedProviders) > 0 {
 		warning = fmt.Sprintf(
 			"Live search unavailable (%s).",
 			strings.Join(failedProviders, ", "),

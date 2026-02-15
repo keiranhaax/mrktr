@@ -82,11 +82,11 @@ func (p *BraveProvider) Search(ctx context.Context, query string) ([]types.Listi
 		return nil, fmt.Errorf("read brave response: %w", err)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf(
-			"brave status %d: %s",
-			resp.StatusCode,
-			summarizeHTTPBody(body),
-		)
+		return nil, &HTTPStatusError{
+			Provider: "Brave",
+			Status:   resp.StatusCode,
+			Body:     summarizeHTTPBody(body),
+		}
 	}
 
 	var result struct {

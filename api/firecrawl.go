@@ -78,11 +78,11 @@ func (p *FirecrawlProvider) Search(ctx context.Context, query string) ([]types.L
 		return nil, fmt.Errorf("read firecrawl response: %w", err)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf(
-			"firecrawl status %d: %s",
-			resp.StatusCode,
-			summarizeHTTPBody(body),
-		)
+		return nil, &HTTPStatusError{
+			Provider: "Firecrawl",
+			Status:   resp.StatusCode,
+			Body:     summarizeHTTPBody(body),
+		}
 	}
 
 	var result struct {

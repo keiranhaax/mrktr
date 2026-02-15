@@ -6,13 +6,16 @@ import (
 	"fmt"
 	"mrktr/api"
 	"mrktr/idea"
+	"mrktr/types"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -54,7 +57,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		visible := m.visibleResultRows()
+		visible := m.visibleResultRowsForList()
 		if m.resultsOffset > 0 && m.resultsOffset+visible > len(m.results) {
 			m.resultsOffset = max(0, len(m.results)-visible)
 		}
@@ -66,6 +69,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case openURLResultMsg:
 		if msg.Err != nil {
 			m.err = msg.Err
+		}
+		return m, nil
+
+	case clipboardResultMsg:
+		if msg.Err != nil {
+			m.err = msg.Err
+			return m, nil
+		}
+		return m, m.setStatusFlash("Copied!", 1500*time.Millisecond)
+
+	case exportResultMsg:
+		if msg.Err != nil {
+			m.err = msg.Err
+			return m, nil
+		}
+		return m, m.setStatusFlash(fmt.Sprintf("Exported: %s", msg.Path), 1800*time.Millisecond)
+
+	case historyLoadedMsg:
+		if msg.Err != nil {
+			m.err = msg.Err
+			return m, nil
+		}
+		m.applyLoadedHistory(msg.Entries)
+		return m, nil
+
+	case historySavedMsg:
+		if msg.Err != nil {
+			m.err = msg.Err
+		}
+		return m, nil
+
+	case statusFlashClearMsg:
+		if msg.gen == m.statusFlashGen {
+			m.statusFlash = ""
 		}
 		return m, nil
 
@@ -88,7 +125,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen != m.reveal.Gen || !m.reveal.Revealing {
 			return m, nil
 		}
-		targetRows := min(len(m.results), m.visibleResultRows())
+		targetRows := min(len(m.results), m.visibleResultRowsForList())
 		if m.reveal.Rows < targetRows {
 			m.reveal.Rows++
 		}
@@ -191,19 +228,26 @@ func (m Model) handleSearchResults(msg SearchResultsMsg) (tea.Model, tea.Cmd) {
 	}
 
 	prevStats := m.extendedStats
-	m.results = msg.Results
-	m.extendedStats = idea.CalculateExtendedStats(m.results)
-	m.stats = m.extendedStats.Statistics
+	m.rawResults = append([]types.Listing(nil), msg.Results...)
+	m.applySortAndFilter()
 	m.selectedIndex = 0
 	m.resultsOffset = 0
+	m.detailOpen = false
 	m.err = nil
+
+	if m.lastQuery != "" {
+		m.updateHistoryResultCount(m.lastQuery, len(m.results))
+		if err := m.persistHistory(); err != nil {
+			m.err = err
+		}
+	}
 
 	var cmds []tea.Cmd
 	if len(m.results) > 0 {
 		m.reveal.Gen++
 		m.statsReveal.Gen++
 		if m.reduceMotion {
-			m.reveal.Rows = min(len(m.results), m.visibleResultRows())
+			m.reveal.Rows = min(len(m.results), m.visibleResultRowsForList())
 			m.reveal.Revealing = false
 			m.statsReveal.Revealed = m.statsRevealTargetLines()
 		} else {
@@ -315,6 +359,17 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(msg, m.keys.Escape):
+		if m.focusedPanel == panelResults {
+			if m.detailOpen {
+				m.detailOpen = false
+				return m, nil
+			}
+			if m.filterBarActive {
+				m.filterBarActive = false
+				m.clampResultsOffset()
+				return m, nil
+			}
+		}
 		return m.changeFocus(panelResults)
 	}
 
@@ -361,7 +416,7 @@ func (m Model) toggleReduceMotion() Model {
 	m.reveal.Gen++
 	m.reveal.Revealing = false
 	if len(m.results) > 0 {
-		m.reveal.Rows = min(len(m.results), m.visibleResultRows())
+		m.reveal.Rows = min(len(m.results), m.visibleResultRowsForList())
 	} else {
 		m.reveal.Rows = 0
 	}
@@ -425,6 +480,103 @@ func (m Model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleResultsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if key.Matches(msg, m.keys.SortCycle) {
+		m.sortField = m.nextSortField()
+		m.applySortAndFilter()
+		m.resetResultsSelection()
+		return m, nil
+	}
+
+	if key.Matches(msg, m.keys.SortReverse) {
+		if m.sortDirection == types.SortDirectionAsc {
+			m.sortDirection = types.SortDirectionDesc
+		} else {
+			m.sortDirection = types.SortDirectionAsc
+		}
+		m.applySortAndFilter()
+		m.resetResultsSelection()
+		return m, nil
+	}
+
+	if key.Matches(msg, m.keys.FilterToggle) {
+		m.filterBarActive = !m.filterBarActive
+		if m.filterBarActive {
+			m.detailOpen = false
+		}
+		m.clampResultsOffset()
+		return m, nil
+	}
+
+	if m.filterBarActive {
+		switch {
+		case key.Matches(msg, m.keys.FilterPlat):
+			m.resultFilter.Platform = m.nextFilterPlatform()
+			m.applySortAndFilter()
+			m.resetResultsSelection()
+			return m, nil
+		case key.Matches(msg, m.keys.FilterNew):
+			if strings.EqualFold(m.resultFilter.Condition, "New") {
+				m.resultFilter.Condition = ""
+			} else {
+				m.resultFilter.Condition = "New"
+			}
+			m.applySortAndFilter()
+			m.resetResultsSelection()
+			return m, nil
+		case key.Matches(msg, m.keys.FilterUsed):
+			if strings.EqualFold(m.resultFilter.Condition, "Used") {
+				m.resultFilter.Condition = ""
+			} else {
+				m.resultFilter.Condition = "Used"
+			}
+			m.applySortAndFilter()
+			m.resetResultsSelection()
+			return m, nil
+		case key.Matches(msg, m.keys.FilterStatus):
+			switch strings.ToLower(strings.TrimSpace(m.resultFilter.Status)) {
+			case "":
+				m.resultFilter.Status = "Active"
+			case "active":
+				m.resultFilter.Status = "Sold"
+			default:
+				m.resultFilter.Status = ""
+			}
+			m.applySortAndFilter()
+			m.resetResultsSelection()
+			return m, nil
+		}
+	}
+
+	selected, ok := m.selectedListing()
+	if !ok {
+		return m, nil
+	}
+
+	if key.Matches(msg, m.keys.CopyURL) {
+		return m, copyToClipboardCmd(selected.URL)
+	}
+
+	if key.Matches(msg, m.keys.CopyListing) {
+		return m, copyToClipboardCmd(formatListingForCopy(selected))
+	}
+
+	if key.Matches(msg, m.keys.ExportCSV) {
+		return m, exportResultsCmd(m.lastQuery, m.results, "csv")
+	}
+
+	if key.Matches(msg, m.keys.ExportJSON) {
+		return m, exportResultsCmd(m.lastQuery, m.results, "json")
+	}
+
+	if m.detailOpen {
+		if key.Matches(msg, m.keys.Enter) {
+			if selected.URL != "" {
+				return m, openURLCmd(selected.URL)
+			}
+		}
+		return m, nil
+	}
+
 	if key.Matches(msg, m.keys.Down) {
 		if m.reveal.Revealing {
 			m.reveal.Revealing = false
@@ -432,7 +584,7 @@ func (m Model) handleResultsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.selectedIndex < len(m.results)-1 {
 			m.selectedIndex++
-			visible := m.visibleResultRows()
+			visible := m.visibleResultRowsForList()
 			if m.selectedIndex >= m.resultsOffset+visible {
 				m.resultsOffset = m.selectedIndex - visible + 1
 			}
@@ -455,18 +607,19 @@ func (m Model) handleResultsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if key.Matches(msg, m.keys.Enter) {
-		if len(m.results) > 0 && m.selectedIndex < len(m.results) {
-			url := m.results[m.selectedIndex].URL
-			if url != "" {
-				return m, openURLCmd(url)
-			}
-		}
+		m.detailOpen = true
+		return m, nil
 	}
 
 	return m, nil
 }
 
 func (m Model) handleCalculatorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if key.Matches(msg, m.keys.CalcPlatform) {
+		m.calcPlatform = m.nextCalcPlatform()
+		return m, nil
+	}
+
 	if key.Matches(msg, m.keys.Enter) {
 		if val, err := strconv.ParseFloat(m.costInput.Value(), 64); err == nil {
 			m.cost = val
@@ -505,7 +658,7 @@ func (m Model) handleHistoryKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.history) > 0 && m.historyIndex < len(m.history) {
 			query := m.history[m.historyIndex]
 			m.searchInput.SetValue(query)
-			return m.startSearch(query, false)
+			return m.startSearch(query, true)
 		}
 	}
 
@@ -551,17 +704,85 @@ func (m Model) changeFocus(newPanel int) (tea.Model, tea.Cmd) {
 }
 
 // addToHistory adds a search query to history (avoiding duplicates).
-func (m *Model) addToHistory(query string) {
+func (m *Model) addToHistory(query string, ts time.Time) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return
+	}
+	if ts.IsZero() {
+		ts = time.Now().UTC()
+	}
+
 	for i, h := range m.history {
-		if h == query {
+		if strings.EqualFold(h, query) {
 			m.history = append(m.history[:i], m.history[i+1:]...)
 			break
 		}
 	}
 	m.history = append([]string{query}, m.history...)
-	if len(m.history) > 20 {
-		m.history = m.history[:20]
+	if len(m.history) > historyMaxEntries {
+		m.history = m.history[:historyMaxEntries]
 	}
+	m.historyIndex = 0
+	if m.historyMeta == nil {
+		m.historyMeta = map[string]HistoryEntry{}
+	}
+	key := strings.ToLower(query)
+	entry := m.historyMeta[key]
+	entry.Query = query
+	entry.Timestamp = ts
+	m.historyMeta[key] = entry
+}
+
+func (m *Model) updateHistoryResultCount(query string, count int) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return
+	}
+	if m.historyMeta == nil {
+		m.historyMeta = map[string]HistoryEntry{}
+	}
+	key := strings.ToLower(query)
+	entry := m.historyMeta[key]
+	if entry.Query == "" {
+		entry.Query = query
+	}
+	entry.ResultCount = count
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = time.Now().UTC()
+	}
+	m.historyMeta[key] = entry
+}
+
+func (m Model) historyEntries() []HistoryEntry {
+	entries := make([]HistoryEntry, 0, len(m.history))
+	for _, query := range m.history {
+		key := strings.ToLower(query)
+		entry := m.historyMeta[key]
+		if strings.TrimSpace(entry.Query) == "" {
+			entry.Query = query
+			entry.Timestamp = time.Now().UTC()
+		}
+		entries = append(entries, entry)
+	}
+	return normalizeHistoryEntries(entries)
+}
+
+func (m *Model) applyLoadedHistory(entries []HistoryEntry) {
+	m.history = m.history[:0]
+	m.historyMeta = map[string]HistoryEntry{}
+	for _, entry := range normalizeHistoryEntries(entries) {
+		m.history = append(m.history, entry.Query)
+		m.historyMeta[strings.ToLower(entry.Query)] = entry
+	}
+	m.historyIndex = 0
+}
+
+func (m Model) persistHistory() error {
+	if m.historyStore == nil {
+		return nil
+	}
+	return m.historyStore.Save(m.historyEntries())
 }
 
 func (m *Model) refreshSearchSuggestions() {
@@ -686,10 +907,17 @@ func (m Model) startSearch(rawQuery string, addToHistory bool) (tea.Model, tea.C
 	m.statsAnim.DeltaTicks = 0
 	m.warning = ""
 	m.err = nil
+	m.lastQuery = query
+	m.detailOpen = false
 	if addToHistory {
-		m.addToHistory(query)
+		m.addToHistory(query, time.Now().UTC())
 	}
 
+	if addToHistory {
+		if err := m.persistHistory(); err != nil {
+			m.err = err
+		}
+	}
 	return m, m.doSearch(ctx, expandedQuery, m.searchGen)
 }
 
@@ -766,6 +994,174 @@ func openURL(rawURL string) error {
 		return nil
 	}
 	return fmt.Errorf("open URL: unsupported platform %q", runtime.GOOS)
+}
+
+func (m *Model) applySortAndFilter() {
+	filtered := types.ApplyFilter(m.rawResults, m.resultFilter)
+	m.results = types.SortResults(filtered, m.sortField, m.sortDirection)
+	m.extendedStats = idea.CalculateExtendedStats(m.results)
+	m.stats = m.extendedStats.Statistics
+	if len(m.results) == 0 {
+		m.detailOpen = false
+	}
+	m.clampResultsOffset()
+}
+
+func (m *Model) resetResultsSelection() {
+	m.selectedIndex = 0
+	m.resultsOffset = 0
+	m.detailOpen = false
+	m.reveal.Revealing = false
+	m.reveal.Rows = min(len(m.results), m.visibleResultRowsForList())
+	m.statsReveal.Revealed = m.statsRevealTargetLines()
+}
+
+func (m *Model) clampResultsOffset() {
+	visible := m.visibleResultRowsForList()
+	if visible < 1 {
+		visible = 1
+	}
+	if m.selectedIndex >= len(m.results) {
+		m.selectedIndex = max(0, len(m.results)-1)
+	}
+	if m.resultsOffset > 0 && m.resultsOffset+visible > len(m.results) {
+		m.resultsOffset = max(0, len(m.results)-visible)
+	}
+	if m.selectedIndex < m.resultsOffset {
+		m.resultsOffset = m.selectedIndex
+	}
+}
+
+func (m Model) visibleResultRowsForList() int {
+	rows := m.visibleResultRows()
+	if m.filterBarActive {
+		rows--
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	return rows
+}
+
+func (m Model) nextSortField() types.SortField {
+	switch m.sortField {
+	case types.SortFieldPlatform:
+		return types.SortFieldCondition
+	case types.SortFieldCondition:
+		return types.SortFieldStatus
+	case types.SortFieldStatus:
+		return types.SortFieldPrice
+	default:
+		return types.SortFieldPlatform
+	}
+}
+
+func (m Model) selectedListing() (types.Listing, bool) {
+	if len(m.results) == 0 {
+		return types.Listing{}, false
+	}
+	if m.selectedIndex < 0 || m.selectedIndex >= len(m.results) {
+		return types.Listing{}, false
+	}
+	return m.results[m.selectedIndex], true
+}
+
+func (m Model) nextFilterPlatform() string {
+	options := []string{"", "eBay", "Mercari", "Amazon", "Facebook", "Other"}
+	current := strings.ToLower(strings.TrimSpace(m.resultFilter.Platform))
+	index := 0
+	for i, option := range options {
+		if strings.ToLower(option) == current {
+			index = i
+			break
+		}
+	}
+	return options[(index+1)%len(options)]
+}
+
+func (m Model) nextCalcPlatform() string {
+	options := []string{"eBay", "Mercari", "Amazon", "Facebook"}
+	current := strings.ToLower(strings.TrimSpace(m.calcPlatform))
+	index := 0
+	for i, option := range options {
+		if strings.ToLower(option) == current {
+			index = i
+			break
+		}
+	}
+	return options[(index+1)%len(options)]
+}
+
+func loadHistoryCmd(store HistoryStore) tea.Cmd {
+	return func() tea.Msg {
+		if store == nil {
+			return historyLoadedMsg{Entries: []HistoryEntry{}}
+		}
+		entries, err := store.Load()
+		return historyLoadedMsg{Entries: entries, Err: err}
+	}
+}
+
+func saveHistoryCmd(store HistoryStore, entries []HistoryEntry) tea.Cmd {
+	snapshot := append([]HistoryEntry(nil), entries...)
+	return func() tea.Msg {
+		if store == nil {
+			return historySavedMsg{}
+		}
+		return historySavedMsg{Err: store.Save(snapshot)}
+	}
+}
+
+func copyToClipboardCmd(value string) tea.Cmd {
+	return func() tea.Msg {
+		if err := clipboard.WriteAll(value); err != nil {
+			return clipboardResultMsg{Err: fmt.Errorf("copy to clipboard: %w", err)}
+		}
+		return clipboardResultMsg{}
+	}
+}
+
+func exportResultsCmd(query string, listings []types.Listing, format string) tea.Cmd {
+	snapshot := append([]types.Listing(nil), listings...)
+	return func() tea.Msg {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return exportResultMsg{Err: fmt.Errorf("resolve home directory: %w", err)}
+		}
+
+		ext := strings.ToLower(strings.TrimSpace(format))
+		if ext == "" {
+			ext = "csv"
+		}
+		path := BuildExportPath(homeDir, query, ext, time.Now())
+		if ext == "json" {
+			err = ExportJSON(path, snapshot)
+		} else {
+			err = ExportCSV(path, snapshot)
+		}
+		return exportResultMsg{Path: path, Err: err}
+	}
+}
+
+func formatListingForCopy(listing types.Listing) string {
+	return fmt.Sprintf(
+		"%s | %s | %s | $%.2f\n%s\n%s",
+		listing.Platform,
+		listing.Condition,
+		listing.Status,
+		listing.Price,
+		listing.Title,
+		listing.URL,
+	)
+}
+
+func (m *Model) setStatusFlash(text string, duration time.Duration) tea.Cmd {
+	m.statusFlash = strings.TrimSpace(text)
+	m.statusFlashGen++
+	gen := m.statusFlashGen
+	return tea.Tick(duration, func(time.Time) tea.Msg {
+		return statusFlashClearMsg{gen: gen}
+	})
 }
 
 func (m Model) statsRevealTargetLines() int {

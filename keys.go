@@ -3,22 +3,34 @@ package main
 import "github.com/charmbracelet/bubbles/key"
 
 type keyMap struct {
-	Quit       key.Binding
-	ForceQuit  key.Binding
-	Tab        key.Binding
-	ShiftTab   key.Binding
-	StatsSum   key.Binding
-	StatsDist  key.Binding
-	StatsMkt   key.Binding
-	ToggleAnim key.Binding
-	Search     key.Binding
-	Calculator key.Binding
-	Escape     key.Binding
-	Enter      key.Binding
-	Down       key.Binding
-	Up         key.Binding
-	HistNext   key.Binding
-	HistPrev   key.Binding
+	Quit         key.Binding
+	ForceQuit    key.Binding
+	Tab          key.Binding
+	ShiftTab     key.Binding
+	StatsSum     key.Binding
+	StatsDist    key.Binding
+	StatsMkt     key.Binding
+	ToggleAnim   key.Binding
+	Search       key.Binding
+	Calculator   key.Binding
+	Escape       key.Binding
+	Enter        key.Binding
+	Down         key.Binding
+	Up           key.Binding
+	HistNext     key.Binding
+	HistPrev     key.Binding
+	SortCycle    key.Binding
+	SortReverse  key.Binding
+	FilterToggle key.Binding
+	FilterPlat   key.Binding
+	FilterNew    key.Binding
+	FilterUsed   key.Binding
+	FilterStatus key.Binding
+	CopyURL      key.Binding
+	CopyListing  key.Binding
+	ExportCSV    key.Binding
+	ExportJSON   key.Binding
+	CalcPlatform key.Binding
 }
 
 func defaultKeyMap() keyMap {
@@ -87,17 +99,67 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("k", "left"),
 			key.WithHelp("k/left", "prev history"),
 		),
+		SortCycle: key.NewBinding(
+			key.WithKeys("s"),
+			key.WithHelp("s", "sort field"),
+		),
+		SortReverse: key.NewBinding(
+			key.WithKeys("S"),
+			key.WithHelp("S", "sort dir"),
+		),
+		FilterToggle: key.NewBinding(
+			key.WithKeys("f"),
+			key.WithHelp("f", "filters"),
+		),
+		FilterPlat: key.NewBinding(
+			key.WithKeys("p"),
+			key.WithHelp("p", "platform"),
+		),
+		FilterNew: key.NewBinding(
+			key.WithKeys("n"),
+			key.WithHelp("n", "new"),
+		),
+		FilterUsed: key.NewBinding(
+			key.WithKeys("u"),
+			key.WithHelp("u", "used"),
+		),
+		FilterStatus: key.NewBinding(
+			key.WithKeys("a"),
+			key.WithHelp("a", "status"),
+		),
+		CopyURL: key.NewBinding(
+			key.WithKeys("y"),
+			key.WithHelp("y", "copy url"),
+		),
+		CopyListing: key.NewBinding(
+			key.WithKeys("Y"),
+			key.WithHelp("Y", "copy listing"),
+		),
+		ExportCSV: key.NewBinding(
+			key.WithKeys("e"),
+			key.WithHelp("e", "export csv"),
+		),
+		ExportJSON: key.NewBinding(
+			key.WithKeys("E"),
+			key.WithHelp("E", "export json"),
+		),
+		CalcPlatform: key.NewBinding(
+			key.WithKeys("p"),
+			key.WithHelp("p", "calc platform"),
+		),
 	}
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Search, k.Enter, k.Down, k.Tab, k.ToggleAnim, k.Quit}
+	return []key.Binding{k.Search, k.Enter, k.Down, k.SortCycle, k.FilterToggle, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Search, k.Enter, k.Escape},
 		{k.Down, k.Up, k.HistNext, k.HistPrev},
+		{k.SortCycle, k.SortReverse, k.FilterToggle, k.FilterPlat, k.FilterNew, k.FilterUsed},
+		{k.FilterStatus, k.CopyURL, k.CopyListing, k.ExportCSV, k.ExportJSON, k.CalcPlatform},
 		{k.StatsSum, k.StatsDist, k.StatsMkt, k.Tab, k.ShiftTab, k.ToggleAnim},
 		{k.Calculator, k.Quit, k.ForceQuit},
 	}
