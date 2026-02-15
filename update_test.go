@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"mrktr/api"
+	"mrktr/idea"
 	"mrktr/types"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -239,6 +240,46 @@ func TestScrollOffsetResetsOnNewResults(t *testing.T) {
 	}
 }
 
+func TestSearchResultsPopulateExtendedStats(t *testing.T) {
+	m := newTestModel()
+	m.statsViewMode = idea.StatsViewMarket
+
+	listings := []types.Listing{
+		{Platform: "eBay", Price: 100, Condition: "Used", Status: "Sold"},
+		{Platform: "Mercari", Price: 200, Condition: "New", Status: "Active"},
+		{Platform: "eBay", Price: 300, Condition: "Used", Status: "Active"},
+	}
+
+	updated, _ := m.Update(SearchResultsMsg{
+		Results: listings,
+		Mode:    api.SearchModeLive,
+	})
+	um, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", m, updated)
+	}
+
+	if um.statsViewMode != idea.StatsViewMarket {
+		t.Fatalf("expected stats view mode to be preserved, got %v", um.statsViewMode)
+	}
+
+	if um.extendedStats.Count != len(listings) {
+		t.Fatalf("expected extended stats count %d, got %d", len(listings), um.extendedStats.Count)
+	}
+	if um.extendedStats.Statistics != um.stats {
+		t.Fatalf("expected base stats and embedded stats to match, base=%+v extended=%+v", um.stats, um.extendedStats.Statistics)
+	}
+
+	if um.extendedStats.SoldCount != 1 || um.extendedStats.ActiveCount != 2 {
+		t.Fatalf("unexpected sold/active counts: sold=%d active=%d", um.extendedStats.SoldCount, um.extendedStats.ActiveCount)
+	}
+
+	eBayStats := um.extendedStats.PlatformStats["eBay"]
+	if eBayStats.Count != 2 {
+		t.Fatalf("expected eBay platform count 2, got %d", eBayStats.Count)
+	}
+}
+
 func TestScrollOffsetClampsOnResize(t *testing.T) {
 	m := newTestModel()
 	m.results = makeListings(20)
@@ -337,6 +378,327 @@ func TestTabChangesPanelWhenSearchSuggestionDoesNotMatch(t *testing.T) {
 	}
 }
 
+func TestStatsViewKeysIgnoredOutsideStatsPanel(t *testing.T) {
+	m := newTestModel()
+	m.focusedPanel = panelResults
+	m = m.updateFocus()
+	m.statsViewMode = idea.StatsViewSummary
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	um, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", m, updated)
+	}
+
+	if um.statsViewMode != idea.StatsViewSummary {
+		t.Fatalf("expected stats mode unchanged outside stats panel, got %v", um.statsViewMode)
+	}
+}
+
+func TestStatsViewKeysSwitchWhenStatsPanelFocused(t *testing.T) {
+	m := newTestModel()
+	m.focusedPanel = panelStats
+	m = m.updateFocus()
+	m.results = makeListings(5)
+	m.statsViewMode = idea.StatsViewSummary
+	m.statsReveal.Gen = 4
+	m.statsReveal.Revealed = 3
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	um, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", m, updated)
+	}
+
+	if um.focusedPanel != panelStats {
+		t.Fatalf("expected stats panel focus to remain, got %d", um.focusedPanel)
+	}
+	if um.statsViewMode != idea.StatsViewDistribution {
+		t.Fatalf("expected stats mode distribution, got %v", um.statsViewMode)
+	}
+	if um.statsReveal.Revealed != 0 {
+		t.Fatalf("expected stats reveal reset to 0, got %d", um.statsReveal.Revealed)
+	}
+	if um.statsReveal.Gen != 5 {
+		t.Fatalf("expected stats reveal generation increment to 5, got %d", um.statsReveal.Gen)
+	}
+	if cmd == nil {
+		t.Fatal("expected stats reveal tick command after stats mode change")
+	}
+}
+
+func TestSearchResultsStartStatsValueTweenWhenPreviousStatsExist(t *testing.T) {
+	m := newTestModel()
+	m.extendedStats = idea.CalculateExtendedStats([]types.Listing{
+		{Platform: "eBay", Price: 100, Condition: "Used", Status: "Active"},
+		{Platform: "eBay", Price: 110, Condition: "Used", Status: "Active"},
+	})
+	m.stats = m.extendedStats.Statistics
+
+	updated, cmd := m.Update(SearchResultsMsg{
+		Results: []types.Listing{
+			{Platform: "eBay", Price: 200, Condition: "Used", Status: "Active"},
+			{Platform: "Mercari", Price: 260, Condition: "New", Status: "Sold"},
+		},
+		Mode: api.SearchModeLive,
+	})
+	um, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", m, updated)
+	}
+	if cmd == nil {
+		t.Fatal("expected command batch on search results")
+	}
+
+	if !um.statsAnim.ValueTweenOn {
+		t.Fatal("expected stats value tween to start")
+	}
+	if um.statsAnim.ValueSteps <= 0 {
+		t.Fatalf("expected positive value tween steps, got %d", um.statsAnim.ValueSteps)
+	}
+	if um.statsAnim.DeltaTicks <= 0 {
+		t.Fatalf("expected positive delta ticks, got %d", um.statsAnim.DeltaTicks)
+	}
+	if um.statsAnim.ValueTweenGen == 0 {
+		t.Fatal("expected non-zero tween generation")
+	}
+}
+
+func TestStatsValueTickAdvancesTweenAndDelta(t *testing.T) {
+	m := newTestModel()
+	m.statsAnim.ValueTweenGen = 7
+	m.statsAnim.ValueTweenOn = true
+	m.statsAnim.ValueStep = 0
+	m.statsAnim.ValueSteps = 2
+	m.statsAnim.DeltaTotal = 3
+	m.statsAnim.DeltaTicks = 3
+
+	updated, cmd := m.Update(statsValueTickMsg{gen: 7})
+	um, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", m, updated)
+	}
+	if cmd == nil {
+		t.Fatal("expected follow-up tick command while tween/delta active")
+	}
+	if um.statsAnim.ValueStep != 1 {
+		t.Fatalf("expected tween step to increment to 1, got %d", um.statsAnim.ValueStep)
+	}
+	if um.statsAnim.DeltaTicks != 2 {
+		t.Fatalf("expected delta ticks to decrement to 2, got %d", um.statsAnim.DeltaTicks)
+	}
+
+	updated2, cmd2 := um.Update(statsValueTickMsg{gen: 7})
+	um2, ok := updated2.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", um, updated2)
+	}
+	if cmd2 == nil {
+		t.Fatal("expected follow-up tick command while delta is still active")
+	}
+	if um2.statsAnim.ValueTweenOn {
+		t.Fatal("expected tween to end at configured step count")
+	}
+	if um2.statsAnim.ValueStep != 2 {
+		t.Fatalf("expected tween step clamped at 2, got %d", um2.statsAnim.ValueStep)
+	}
+	if um2.statsAnim.DeltaTicks != 1 {
+		t.Fatalf("expected delta ticks to decrement to 1, got %d", um2.statsAnim.DeltaTicks)
+	}
+
+	updated3, cmd3 := um2.Update(statsValueTickMsg{gen: 7})
+	um3, ok := updated3.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", um2, updated3)
+	}
+	if cmd3 != nil {
+		t.Fatal("expected no follow-up tick command after tween and delta complete")
+	}
+	if um3.statsAnim.DeltaTicks != 0 {
+		t.Fatalf("expected delta ticks to reach 0, got %d", um3.statsAnim.DeltaTicks)
+	}
+}
+
+func TestReduceMotionSkipsStatsRevealAnimationOnTabChange(t *testing.T) {
+	m := newTestModel()
+	m.reduceMotion = true
+	m.focusedPanel = panelStats
+	m = m.updateFocus()
+	m.results = makeListings(5)
+	m.extendedStats = idea.CalculateExtendedStats(m.results)
+	m.stats = m.extendedStats.Statistics
+	m.statsViewMode = idea.StatsViewSummary
+	m.statsReveal.Revealed = 0
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	um, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", m, updated)
+	}
+
+	if cmd != nil {
+		t.Fatal("expected no reveal animation command when reduceMotion=true")
+	}
+	if um.statsViewMode != idea.StatsViewDistribution {
+		t.Fatalf("expected distribution mode, got %v", um.statsViewMode)
+	}
+	if um.statsReveal.Revealed != um.statsRevealTargetLines() {
+		t.Fatalf("expected stats reveal to jump to target (%d), got %d", um.statsRevealTargetLines(), um.statsReveal.Revealed)
+	}
+}
+
+func TestReduceMotionSkipsStatsValueTweenOnSearchResults(t *testing.T) {
+	m := newTestModel()
+	m.reduceMotion = true
+	m.extendedStats = idea.CalculateExtendedStats([]types.Listing{
+		{Platform: "eBay", Price: 100, Status: "Active"},
+		{Platform: "eBay", Price: 120, Status: "Sold"},
+	})
+	m.stats = m.extendedStats.Statistics
+
+	updated, _ := m.Update(SearchResultsMsg{
+		Results: []types.Listing{
+			{Platform: "Mercari", Price: 240, Status: "Active"},
+			{Platform: "Amazon", Price: 260, Status: "Sold"},
+		},
+		Mode: api.SearchModeLive,
+	})
+	um, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", m, updated)
+	}
+
+	if um.statsAnim.ValueTweenOn {
+		t.Fatal("expected value tween to remain disabled in reduceMotion mode")
+	}
+	if um.statsAnim.DeltaTicks != 0 {
+		t.Fatalf("expected no delta ticks in reduceMotion mode, got %d", um.statsAnim.DeltaTicks)
+	}
+}
+
+func TestReduceMotionSkipsFocusFlashAnimation(t *testing.T) {
+	m := newTestModel()
+	m.reduceMotion = true
+	m.focusedPanel = panelSearch
+	m = m.updateFocus()
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	um, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", m, updated)
+	}
+
+	if cmd != nil {
+		t.Fatal("expected no focus flash command in reduceMotion mode")
+	}
+	if um.focusFlash.Active || um.focusFlash.Ticks != 0 {
+		t.Fatalf("expected inactive focus flash in reduceMotion mode, got active=%v ticks=%d", um.focusFlash.Active, um.focusFlash.Ticks)
+	}
+}
+
+func TestGlobalMotionToggleFlipsSetting(t *testing.T) {
+	m := newTestModel()
+	m.focusedPanel = panelResults
+	m = m.updateFocus()
+
+	updatedOn, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	onModel, ok := updatedOn.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", m, updatedOn)
+	}
+	if !onModel.reduceMotion {
+		t.Fatal("expected global m key to enable reduceMotion")
+	}
+
+	updatedOff, _ := onModel.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	offModel, ok := updatedOff.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", onModel, updatedOff)
+	}
+	if offModel.reduceMotion {
+		t.Fatal("expected second global m key to disable reduceMotion")
+	}
+}
+
+func TestGlobalMotionToggleSettlesInFlightAnimations(t *testing.T) {
+	m := newTestModel()
+	m.results = makeListings(10)
+	m.extendedStats = idea.CalculateExtendedStats(m.results)
+	m.stats = m.extendedStats.Statistics
+	m.focusFlash.Gen = 2
+	m.focusFlash.Active = true
+	m.focusFlash.Ticks = 2
+	m.reveal.Gen = 3
+	m.reveal.Revealing = true
+	m.reveal.Rows = 1
+	m.statsReveal.Gen = 4
+	m.statsReveal.Revealed = 1
+	m.statsAnim.ValueTweenGen = 5
+	m.statsAnim.ValueTweenOn = true
+	m.statsAnim.ValueStep = 6
+	m.statsAnim.ValueSteps = 15
+	m.statsAnim.DeltaTotal = 24
+	m.statsAnim.DeltaTicks = 8
+	m.statsAnim.DeltaAvg = 10
+	m.statsAnim.DeltaMin = -3
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	um, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", m, updated)
+	}
+	if !um.reduceMotion {
+		t.Fatal("expected reduceMotion to be enabled")
+	}
+	if um.focusFlash.Active || um.focusFlash.Ticks != 0 {
+		t.Fatalf("expected focus flash to be disabled, got active=%v ticks=%d", um.focusFlash.Active, um.focusFlash.Ticks)
+	}
+	if um.reveal.Revealing {
+		t.Fatal("expected results reveal animation to stop")
+	}
+	expectedRows := min(len(um.results), um.visibleResultRows())
+	if um.reveal.Rows != expectedRows {
+		t.Fatalf("expected reveal rows to snap to %d, got %d", expectedRows, um.reveal.Rows)
+	}
+	if um.statsReveal.Revealed != um.statsRevealTargetLines() {
+		t.Fatalf("expected stats reveal to snap to target %d, got %d", um.statsRevealTargetLines(), um.statsReveal.Revealed)
+	}
+	if um.statsAnim.ValueTweenOn {
+		t.Fatal("expected stats value tween to stop")
+	}
+	if um.statsAnim.ValueStep != 0 || um.statsAnim.ValueSteps != 0 {
+		t.Fatalf("expected stats tween counters reset, got step=%d steps=%d", um.statsAnim.ValueStep, um.statsAnim.ValueSteps)
+	}
+	if um.statsAnim.DeltaTicks != 0 || um.statsAnim.DeltaTotal != 0 {
+		t.Fatalf("expected delta animation to reset, got ticks=%d total=%d", um.statsAnim.DeltaTicks, um.statsAnim.DeltaTotal)
+	}
+	if um.statsAnim.DeltaAvg != 0 || um.statsAnim.DeltaMin != 0 {
+		t.Fatalf("expected stored delta values reset, got avg=%f min=%f", um.statsAnim.DeltaAvg, um.statsAnim.DeltaMin)
+	}
+	if um.statsAnim.ValueTweenGen != m.statsAnim.ValueTweenGen+1 {
+		t.Fatalf("expected tween generation to increment, got %d", um.statsAnim.ValueTweenGen)
+	}
+}
+
+func TestGlobalMotionToggleOverridesSearchInputRune(t *testing.T) {
+	m := newTestModel()
+	m.focusedPanel = panelSearch
+	m = m.updateFocus()
+	m.searchInput.SetValue("")
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	um, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("expected model type %T, got %T", m, updated)
+	}
+	if !um.reduceMotion {
+		t.Fatal("expected m key to toggle motion globally from search panel")
+	}
+	if got := um.searchInput.Value(); got != "" {
+		t.Fatalf("expected m key to not type into search input, got %q", got)
+	}
+}
+
 func TestSearchSuggestionsMergeHistoryAndCatalogMatches(t *testing.T) {
 	m := newTestModel()
 	m.history = []string{"switch carrying case", "ps5"}
@@ -430,6 +792,9 @@ func TestLoadingDotsReset(t *testing.T) {
 	if um.loadingDots != 0 {
 		t.Fatalf("expected loading dots reset to 0 on search enter, got %d", um.loadingDots)
 	}
+	if um.statsAnim.SkeletonFrame != 0 {
+		t.Fatalf("expected stats skeleton frame reset to 0 on search enter, got %d", um.statsAnim.SkeletonFrame)
+	}
 
 	updatedTick, _ := um.Update(spinner.TickMsg{})
 	tickModel, ok := updatedTick.(Model)
@@ -438,6 +803,9 @@ func TestLoadingDotsReset(t *testing.T) {
 	}
 	if tickModel.loadingDots != 1 {
 		t.Fatalf("expected loading dots to increment while loading, got %d", tickModel.loadingDots)
+	}
+	if tickModel.statsAnim.SkeletonFrame != 1 {
+		t.Fatalf("expected stats skeleton frame to increment while loading, got %d", tickModel.statsAnim.SkeletonFrame)
 	}
 
 	updatedDone, _ := tickModel.Update(SearchResultsMsg{
@@ -452,6 +820,7 @@ func TestLoadingDotsReset(t *testing.T) {
 		t.Fatal("expected loading=false after receiving search results")
 	}
 	before := doneModel.loadingDots
+	beforeSkeleton := doneModel.statsAnim.SkeletonFrame
 	afterUpdated, _ := doneModel.Update(spinner.TickMsg{})
 	afterModel, ok := afterUpdated.(Model)
 	if !ok {
@@ -459,6 +828,9 @@ func TestLoadingDotsReset(t *testing.T) {
 	}
 	if afterModel.loadingDots != before {
 		t.Fatalf("expected loading dots to stop incrementing when loading=false (before=%d after=%d)", before, afterModel.loadingDots)
+	}
+	if afterModel.statsAnim.SkeletonFrame != beforeSkeleton {
+		t.Fatalf("expected skeleton frame to stop incrementing when loading=false (before=%d after=%d)", beforeSkeleton, afterModel.statsAnim.SkeletonFrame)
 	}
 
 	m2 := newTestModel()
@@ -478,6 +850,9 @@ func TestLoadingDotsReset(t *testing.T) {
 	}
 	if historyModel.loadingDots != 0 {
 		t.Fatalf("expected loading dots reset to 0 on history replay, got %d", historyModel.loadingDots)
+	}
+	if historyModel.statsAnim.SkeletonFrame != 0 {
+		t.Fatalf("expected stats skeleton frame reset to 0 on history replay, got %d", historyModel.statsAnim.SkeletonFrame)
 	}
 }
 
@@ -746,6 +1121,7 @@ func newTestModel() Model {
 	m := NewModel()
 	m.intro.Show = false
 	m.intro.Completed = true
+	m.reduceMotion = false
 	return m
 }
 
