@@ -124,6 +124,27 @@ func TestSearchPricesLiveModeWithEmptyResults(t *testing.T) {
 	}
 }
 
+func TestSearchPricesLiveEmptyIncludesWarningsWhenSomeProvidersFail(t *testing.T) {
+	client := NewClient(
+		stubProvider{name: "Brave", configured: true, err: errors.New("upstream unavailable")},
+		stubProvider{name: "Tavily", configured: true, results: []types.Listing{}},
+	)
+
+	resp := client.SearchPrices("ps5")
+	if resp.Mode != SearchModeLive {
+		t.Fatalf("expected live mode when at least one provider succeeds, got %q", resp.Mode)
+	}
+	if len(resp.Results) != 0 {
+		t.Fatalf("expected no listings for empty successful response, got %d", len(resp.Results))
+	}
+	if !strings.Contains(resp.Warning, "Brave") {
+		t.Fatalf("expected warning to mention failed provider, got %q", resp.Warning)
+	}
+	if len(resp.ProviderErrors) != 1 {
+		t.Fatalf("expected one provider error, got %d", len(resp.ProviderErrors))
+	}
+}
+
 func TestSearchPricesUnavailableWhenProvidersFail(t *testing.T) {
 	client := NewClient(
 		stubProvider{name: "Brave", configured: true, err: errors.New("upstream unavailable")},
@@ -198,7 +219,33 @@ func TestSearchPricesContextPassesContextToProviders(t *testing.T) {
 	if resp.Mode != SearchModeUnavailable {
 		t.Fatalf("expected unavailable mode for canceled context, got %q", resp.Mode)
 	}
+	if !errors.Is(resp.Err, context.Canceled) {
+		t.Fatalf("expected canceled root error, got %v", resp.Err)
+	}
 	if !probe.sawCanceled {
 		t.Fatal("expected provider to observe canceled context")
+	}
+}
+
+func TestSearchPricesProviderErrorClassification(t *testing.T) {
+	client := NewClient(
+		stubProvider{name: "Brave", configured: true, err: &HTTPStatusError{Provider: "Brave", Status: 401, Body: "bad token"}},
+		stubProvider{name: "Tavily", configured: true, err: context.DeadlineExceeded},
+	)
+
+	resp := client.SearchPrices("ps5")
+	if len(resp.ProviderErrors) != 2 {
+		t.Fatalf("expected two provider errors, got %d", len(resp.ProviderErrors))
+	}
+
+	kinds := map[string]ProviderErrorKind{}
+	for _, providerErr := range resp.ProviderErrors {
+		kinds[providerErr.Provider] = providerErr.Kind
+	}
+	if kinds["Brave"] != ProviderErrorAuth {
+		t.Fatalf("expected Brave auth classification, got %q", kinds["Brave"])
+	}
+	if kinds["Tavily"] != ProviderErrorTimeout {
+		t.Fatalf("expected Tavily timeout classification, got %q", kinds["Tavily"])
 	}
 }

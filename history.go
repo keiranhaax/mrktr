@@ -28,9 +28,12 @@ type FileHistoryStore struct {
 	path string
 }
 
-func NewFileHistoryStore() *FileHistoryStore {
-	path, _ := defaultHistoryPath()
-	return &FileHistoryStore{path: path}
+func NewFileHistoryStore() (*FileHistoryStore, error) {
+	path, err := defaultHistoryPath()
+	if err != nil {
+		return nil, err
+	}
+	return &FileHistoryStore{path: path}, nil
 }
 
 func NewFileHistoryStoreAt(path string) *FileHistoryStore {

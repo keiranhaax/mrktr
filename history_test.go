@@ -30,6 +30,16 @@ func TestFileHistoryStoreSaveLoad(t *testing.T) {
 	}
 }
 
+func TestNewFileHistoryStoreBuildsDefaultPath(t *testing.T) {
+	store, err := NewFileHistoryStore()
+	if err != nil {
+		t.Fatalf("expected default history store to initialize, got %v", err)
+	}
+	if store == nil {
+		t.Fatal("expected non-nil history store")
+	}
+}
+
 func TestNormalizeHistoryEntriesDedupesAndTrims(t *testing.T) {
 	entries := []HistoryEntry{
 		{Query: "ps5", Timestamp: time.Now().UTC()},

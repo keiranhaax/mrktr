@@ -28,6 +28,20 @@ type cancelAwareProvider struct {
 	firstCancelCh  chan struct{}
 }
 
+type captureHistoryStore struct {
+	saved []HistoryEntry
+	err   error
+}
+
+func (s *captureHistoryStore) Load() ([]HistoryEntry, error) {
+	return nil, nil
+}
+
+func (s *captureHistoryStore) Save(entries []HistoryEntry) error {
+	s.saved = append([]HistoryEntry(nil), entries...)
+	return s.err
+}
+
 func (p *captureQueryProvider) Name() string {
 	return "Capture"
 }
@@ -1010,6 +1024,40 @@ func TestValidateOpenURL(t *testing.T) {
 				t.Fatalf("expected no error for %q, got %v", tc.rawURL, err)
 			}
 		})
+	}
+}
+
+func TestSaveHistoryCmdHandlesNilStore(t *testing.T) {
+	msg := saveHistoryCmd(nil, []HistoryEntry{{Query: "ps5"}})()
+	result, ok := msg.(historySavedMsg)
+	if !ok {
+		t.Fatalf("expected historySavedMsg, got %T", msg)
+	}
+	if result.Err != nil {
+		t.Fatalf("expected nil error for nil store, got %v", result.Err)
+	}
+}
+
+func TestSaveHistoryCmdUsesSnapshotEntries(t *testing.T) {
+	store := &captureHistoryStore{}
+	entries := []HistoryEntry{{Query: "ps5"}, {Query: "switch"}}
+
+	cmd := saveHistoryCmd(store, entries)
+	entries[0].Query = "mutated"
+
+	msg := cmd()
+	result, ok := msg.(historySavedMsg)
+	if !ok {
+		t.Fatalf("expected historySavedMsg, got %T", msg)
+	}
+	if result.Err != nil {
+		t.Fatalf("expected nil save error, got %v", result.Err)
+	}
+	if len(store.saved) != 2 {
+		t.Fatalf("expected two saved entries, got %d", len(store.saved))
+	}
+	if store.saved[0].Query != "ps5" {
+		t.Fatalf("expected saved snapshot to preserve original query, got %q", store.saved[0].Query)
 	}
 }
 

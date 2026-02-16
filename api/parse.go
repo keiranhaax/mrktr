@@ -2,18 +2,22 @@ package api
 
 import (
 	"mrktr/types"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 )
 
 var (
-	pricePattern           = regexp.MustCompile(`\$(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?`)
-	conditionNewPattern    = regexp.MustCompile(`\bnew\b`)
-	conditionSealedPattern = regexp.MustCompile(`\bsealed\b`)
-	conditionGoodPattern   = regexp.MustCompile(`\bgood\b`)
-	conditionFairPattern   = regexp.MustCompile(`\bfair\b`)
-	statusSoldPattern      = regexp.MustCompile(`\bsold\b`)
+	pricePatternSymbolPrefix = regexp.MustCompile(`(?i)(?:\busd\b|us\s*\$|us\$|\$)\s*(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?`)
+	pricePatternUSDSuffix    = regexp.MustCompile(`(?i)(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?\s*\busd\b`)
+	pricePatternContext      = regexp.MustCompile(`(?i)\b(?:price|asking|ask|obo|offer|now|for)\s*[:\-]?\s*(\d{1,3}(?:,\d{3})+|\d{2,})(?:\.(\d{1,2}))?\b`)
+	conditionNewPattern      = regexp.MustCompile(`\bnew\b`)
+	conditionSealedPattern   = regexp.MustCompile(`\bsealed\b`)
+	conditionGoodPattern     = regexp.MustCompile(`\bgood\b`)
+	conditionFairPattern     = regexp.MustCompile(`\bfair\b`)
+	statusSoldPattern        = regexp.MustCompile(`\bsold\b`)
+	statusUnsoldPattern      = regexp.MustCompile(`\b(?:not\s+sold|unsold|never\s+sold)\b`)
 )
 
 // SearchResult normalizes provider payload fields for parsing.
@@ -33,19 +37,7 @@ func ParseSearchResults(data []SearchResult) []types.Listing {
 			Title: item.Title,
 		}
 
-		urlLower := strings.ToLower(item.URL)
-		switch {
-		case strings.Contains(urlLower, "ebay.com"):
-			listing.Platform = "eBay"
-		case strings.Contains(urlLower, "mercari.com"):
-			listing.Platform = "Mercari"
-		case strings.Contains(urlLower, "amazon.com"):
-			listing.Platform = "Amazon"
-		case strings.Contains(urlLower, "facebook.com"):
-			listing.Platform = "Facebook"
-		default:
-			listing.Platform = "Other"
-		}
+		listing.Platform = detectPlatform(item.URL)
 
 		text := item.Title + " " + item.Description
 		if price, ok := extractBestPrice(text); ok {
@@ -68,7 +60,9 @@ func ParseSearchResults(data []SearchResult) []types.Listing {
 			listing.Condition = "Used"
 		}
 
-		if statusSoldPattern.MatchString(textLower) {
+		if statusUnsoldPattern.MatchString(textLower) {
+			listing.Status = "Active"
+		} else if statusSoldPattern.MatchString(textLower) {
 			listing.Status = "Sold"
 		} else {
 			listing.Status = "Active"
@@ -83,45 +77,91 @@ func ParseSearchResults(data []SearchResult) []types.Listing {
 // extractBestPrice returns the lowest positive USD amount found in the text.
 // This helps pick current prices in snippets like "Was $150, now $99".
 func extractBestPrice(text string) (float64, bool) {
-	matches := pricePattern.FindAllStringSubmatch(text, -1)
-	if len(matches) == 0 {
-		return 0, false
-	}
-
 	best := 0.0
 	found := false
 
-	for _, match := range matches {
-		if len(match) < 2 {
-			continue
-		}
-
-		whole := strings.ReplaceAll(match[1], ",", "")
-		if whole == "" {
-			continue
-		}
-
-		priceStr := whole
-		if len(match) > 2 && match[2] != "" {
-			decimal := match[2]
-			if len(decimal) == 1 {
-				decimal += "0"
+	patterns := []*regexp.Regexp{
+		pricePatternSymbolPrefix,
+		pricePatternUSDSuffix,
+		pricePatternContext,
+	}
+	for _, pattern := range patterns {
+		matches := pattern.FindAllStringSubmatch(text, -1)
+		for _, match := range matches {
+			price, ok := parsePriceMatch(match)
+			if !ok {
+				continue
 			}
-			priceStr += "." + decimal
-		}
-
-		price, err := strconv.ParseFloat(priceStr, 64)
-		if err != nil || price <= 0 {
-			continue
-		}
-
-		if !found || price < best {
-			best = price
-			found = true
+			if !found || price < best {
+				best = price
+				found = true
+			}
 		}
 	}
 
 	return best, found
+}
+
+func parsePriceMatch(match []string) (float64, bool) {
+	if len(match) < 2 {
+		return 0, false
+	}
+
+	whole := strings.ReplaceAll(match[1], ",", "")
+	if whole == "" {
+		return 0, false
+	}
+
+	priceStr := whole
+	if len(match) > 2 && match[2] != "" {
+		decimal := match[2]
+		if len(decimal) == 1 {
+			decimal += "0"
+		}
+		priceStr += "." + decimal
+	}
+
+	price, err := strconv.ParseFloat(priceStr, 64)
+	if err != nil || price <= 0 {
+		return 0, false
+	}
+	return price, true
+}
+
+func detectPlatform(rawURL string) string {
+	host := ""
+	if parsed, err := url.Parse(strings.TrimSpace(rawURL)); err == nil {
+		host = strings.ToLower(parsed.Hostname())
+	}
+	if host == "" {
+		host = strings.ToLower(rawURL)
+	}
+
+	switch {
+	case hostHasLabel(host, "ebay"):
+		return "eBay"
+	case hostHasLabel(host, "mercari"):
+		return "Mercari"
+	case hostHasLabel(host, "amazon"):
+		return "Amazon"
+	case hostHasLabel(host, "facebook") || hostHasLabel(host, "fb"):
+		return "Facebook"
+	default:
+		return "Other"
+	}
+}
+
+func hostHasLabel(host, label string) bool {
+	if host == "" || label == "" {
+		return false
+	}
+	parts := strings.Split(strings.Trim(strings.ToLower(host), "."), ".")
+	for _, part := range parts {
+		if part == label {
+			return true
+		}
+	}
+	return false
 }
 
 func summarizeHTTPBody(body []byte) string {

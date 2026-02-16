@@ -1,6 +1,7 @@
 package types
 
 import (
+	"math"
 	"sort"
 )
 
@@ -71,6 +72,10 @@ func CalculateProfit(cost, sellPrice float64) ProfitCalculation {
 	var profitPercent float64
 	if cost > 0 {
 		profitPercent = (profit / cost) * 100
+	} else if profit > 0 {
+		profitPercent = math.Inf(1)
+	} else if profit < 0 {
+		profitPercent = math.Inf(-1)
 	}
 	return ProfitCalculation{
 		Cost:          cost,

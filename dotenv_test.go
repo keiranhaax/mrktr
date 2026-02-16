@@ -70,3 +70,30 @@ func TestLoadDotEnvFileMissingFileIsNotError(t *testing.T) {
 		t.Fatalf("expected missing dotenv file to be ignored, got %v", err)
 	}
 }
+
+func TestLoadDotEnvFileIgnoresUnknownKeys(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, ".env")
+	content := "UNKNOWN_KEY=1\nBRAVE_API_KEY=from_file\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write .env: %v", err)
+	}
+
+	if err := os.Unsetenv("UNKNOWN_KEY"); err != nil {
+		t.Fatalf("unset unknown env: %v", err)
+	}
+	if err := os.Unsetenv("BRAVE_API_KEY"); err != nil {
+		t.Fatalf("unset brave env: %v", err)
+	}
+
+	err := loadDotEnvFile(path)
+	if err == nil {
+		t.Fatal("expected warning error for unknown .env key")
+	}
+	if got := os.Getenv("UNKNOWN_KEY"); got != "" {
+		t.Fatalf("expected unknown key to remain unset, got %q", got)
+	}
+	if got := os.Getenv("BRAVE_API_KEY"); got != "from_file" {
+		t.Fatalf("expected known key to be loaded, got %q", got)
+	}
+}

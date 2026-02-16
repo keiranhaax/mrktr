@@ -235,14 +235,12 @@ func (m Model) handleSearchResults(msg SearchResultsMsg) (tea.Model, tea.Cmd) {
 	m.detailOpen = false
 	m.err = nil
 
+	cmds := make([]tea.Cmd, 0, 3)
 	if m.lastQuery != "" {
 		m.updateHistoryResultCount(m.lastQuery, len(m.results))
-		if err := m.persistHistory(); err != nil {
-			m.err = err
-		}
+		cmds = append(cmds, saveHistoryCmd(m.historyStore, m.historyEntries()))
 	}
 
-	var cmds []tea.Cmd
 	if len(m.results) > 0 {
 		m.reveal.Gen++
 		m.statsReveal.Gen++
@@ -778,13 +776,6 @@ func (m *Model) applyLoadedHistory(entries []HistoryEntry) {
 	m.historyIndex = 0
 }
 
-func (m Model) persistHistory() error {
-	if m.historyStore == nil {
-		return nil
-	}
-	return m.historyStore.Save(m.historyEntries())
-}
-
 func (m *Model) refreshSearchSuggestions() {
 	prefix := strings.TrimSpace(m.searchInput.Value())
 	if len(prefix) < 2 {
@@ -913,34 +904,36 @@ func (m Model) startSearch(rawQuery string, addToHistory bool) (tea.Model, tea.C
 		m.addToHistory(query, time.Now().UTC())
 	}
 
+	var prepCmds []tea.Cmd
 	if addToHistory {
-		if err := m.persistHistory(); err != nil {
-			m.err = err
-		}
+		prepCmds = append(prepCmds, saveHistoryCmd(m.historyStore, m.historyEntries()))
 	}
-	return m, m.doSearch(ctx, expandedQuery, m.searchGen)
+	return m, m.doSearch(ctx, expandedQuery, m.searchGen, prepCmds...)
 }
 
 // doSearch creates a command to fetch search results.
-func (m Model) doSearch(ctx context.Context, query string, gen int) tea.Cmd {
+func (m Model) doSearch(ctx context.Context, query string, gen int, prepCmds ...tea.Cmd) tea.Cmd {
 	client := m.apiClient
 	if client == nil {
 		client = api.NewEnvClient()
 	}
 
-	return tea.Batch(
-		m.spinner.Tick,
-		func() tea.Msg {
-			response := client.SearchPricesContext(ctx, strings.TrimSpace(query))
-			return SearchResultsMsg{
-				Results: response.Results,
-				Mode:    response.Mode,
-				Warning: response.Warning,
-				Err:     response.Err,
-				gen:     gen,
-			}
-		},
-	)
+	cmds := make([]tea.Cmd, 0, len(prepCmds)+2)
+	cmds = append(cmds, prepCmds...)
+	cmds = append(cmds, m.spinner.Tick)
+	cmds = append(cmds, func() tea.Msg {
+		response := client.SearchPricesContext(ctx, strings.TrimSpace(query))
+		return SearchResultsMsg{
+			Results:        response.Results,
+			Mode:           response.Mode,
+			Warning:        response.Warning,
+			Err:            response.Err,
+			ProviderErrors: response.ProviderErrors,
+			gen:            gen,
+		}
+	})
+
+	return tea.Batch(cmds...)
 }
 
 func openURLCmd(url string) tea.Cmd {
@@ -988,7 +981,7 @@ func openURL(rawURL string) error {
 		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", parsedURL.String())
 	}
 	if cmd != nil {
-		if err := cmd.Start(); err != nil {
+		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("open URL: %w", err)
 		}
 		return nil

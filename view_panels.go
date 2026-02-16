@@ -550,16 +550,22 @@ func (m Model) renderDetailOverlay(width int) string {
 		return emptyStyle.Render("~ No selection ~")
 	}
 
+	title := sanitizeDisplayText(selected.Title)
+	platform := sanitizeDisplayText(selected.Platform)
+	condition := sanitizeDisplayText(selected.Condition)
+	status := sanitizeDisplayText(selected.Status)
+	urlText := sanitizeDisplayText(selected.URL)
+
 	urlWidth := max(16, width-14)
 	lines := []string{
 		activeTitleStyle.Render("Detail View"),
 		separatorStyle.Render(strings.Repeat("╌", max(12, width-8))),
-		fmt.Sprintf("%s %s", labelStyle.Render("Title:"), selected.Title),
-		fmt.Sprintf("%s %s", labelStyle.Render("Platform:"), selected.Platform),
+		fmt.Sprintf("%s %s", labelStyle.Render("Title:"), title),
+		fmt.Sprintf("%s %s", labelStyle.Render("Platform:"), platform),
 		fmt.Sprintf("%s $%.2f", labelStyle.Render("Price:"), selected.Price),
-		fmt.Sprintf("%s %s", labelStyle.Render("Condition:"), selected.Condition),
-		fmt.Sprintf("%s %s", labelStyle.Render("Status:"), selected.Status),
-		fmt.Sprintf("%s %s", labelStyle.Render("URL:"), truncate(selected.URL, urlWidth)),
+		fmt.Sprintf("%s %s", labelStyle.Render("Condition:"), condition),
+		fmt.Sprintf("%s %s", labelStyle.Render("Status:"), status),
+		fmt.Sprintf("%s %s", labelStyle.Render("URL:"), truncate(urlText, urlWidth)),
 		separatorStyle.Render(strings.Repeat("╌", max(12, width-8))),
 		mutedStyle.Render("[enter] open in browser  [esc] back"),
 	}

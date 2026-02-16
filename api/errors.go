@@ -1,6 +1,9 @@
 package api
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // HTTPStatusError captures provider failures by status code.
 type HTTPStatusError struct {
@@ -14,8 +17,8 @@ func (e *HTTPStatusError) Error() string {
 }
 
 func actionableProviderError(provider string, err error) string {
-	statusErr, ok := err.(*HTTPStatusError)
-	if !ok {
+	var statusErr *HTTPStatusError
+	if !errors.As(err, &statusErr) {
 		return ""
 	}
 

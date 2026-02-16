@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"math"
 	"mrktr/api"
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
+
+var ansiControlSequencePattern = regexp.MustCompile(`(?:\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\a]*(?:\a|\x1b\\))`)
 
 func renderModeBadge(mode api.SearchMode) string {
 	dotStyle := warningStyle
@@ -58,6 +61,13 @@ func renderSparkline(prices []float64, width int) string {
 	}
 
 	var b strings.Builder
+	levelStyles := make([]lipgloss.Style, len(blocks))
+	for level := range blocks {
+		ratio := float64(level) / float64(max(1, len(blocks)-1))
+		color := interpolateHexColor("#12B76A", "#D92D20", ratio)
+		levelStyles[level] = lipgloss.NewStyle().Foreground(lipgloss.Color(color))
+	}
+
 	for _, value := range bins {
 		ratio := 0.5
 		if maxPrice > minPrice {
@@ -70,8 +80,7 @@ func renderSparkline(prices []float64, width int) string {
 		if level >= len(blocks) {
 			level = len(blocks) - 1
 		}
-		color := interpolateHexColor("#12B76A", "#D92D20", ratio)
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(string(blocks[level])))
+		b.WriteString(levelStyles[level].Render(string(blocks[level])))
 	}
 
 	return b.String()
@@ -125,10 +134,30 @@ func formatProfit(profit float64) string {
 }
 
 func formatPercent(pct float64) string {
+	if math.IsInf(pct, 0) || math.IsNaN(pct) {
+		return mutedStyle.Render("N/A")
+	}
 	if pct >= 0 {
 		return successStyle.Render(fmt.Sprintf("+%.0f%%", pct))
 	}
 	return dangerStyle.Render(fmt.Sprintf("%.0f%%", pct))
+}
+
+func sanitizeDisplayText(raw string) string {
+	clean := ansiControlSequencePattern.ReplaceAllString(raw, "")
+	var b strings.Builder
+	b.Grow(len(clean))
+	for _, r := range clean {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+			b.WriteRune(' ')
+		case r < 0x20 || r == 0x7f:
+			continue
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func maxAbs(values ...float64) float64 {

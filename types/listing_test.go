@@ -1,6 +1,9 @@
 package types
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestCalculateStats(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
@@ -69,7 +72,7 @@ func TestCalculateProfit(t *testing.T) {
 			cost:        0,
 			sell:        50,
 			wantProfit:  50,
-			wantPercent: 0,
+			wantPercent: math.Inf(1),
 		},
 	}
 

@@ -89,6 +89,32 @@ func TestProductIndexSuggestReturnsTopPrefixMatches(t *testing.T) {
 	}
 }
 
+func TestProductIndexSuggestMatchesTokenPrefixes(t *testing.T) {
+	idx := newProductIndexFromEntries([]ProductEntry{
+		{
+			Name:     "Nintendo Switch OLED",
+			Category: "Gaming",
+			Synonyms: []string{"switch oled", "nintendo switch"},
+		},
+	})
+
+	got := idx.Suggest("ole")
+	if len(got) == 0 {
+		t.Fatal("expected token-prefix suggestion for inner token")
+	}
+
+	found := false
+	for _, suggestion := range got {
+		if strings.Contains(strings.ToLower(suggestion), "oled") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected OLED token match in suggestions, got %v", got)
+	}
+}
+
 func TestNewProductIndexLoadsEmbeddedCatalog(t *testing.T) {
 	idx := NewProductIndex()
 	if idx == nil {

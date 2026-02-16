@@ -176,6 +176,14 @@ func NewModel() Model {
 	hp.Styles.FullDesc = keyDescStyle
 	hp.Styles.FullSeparator = separatorStyle
 
+	var historyStore HistoryStore
+	startupWarning := ""
+	if store, err := NewFileHistoryStore(); err != nil {
+		startupWarning = "History persistence unavailable."
+	} else {
+		historyStore = store
+	}
+
 	return Model{
 		keys:          defaultKeyMap(),
 		help:          hp,
@@ -196,8 +204,9 @@ func NewModel() Model {
 		reduceMotion:  shouldReduceMotionFromEnv(),
 		history:       []string{},
 		historyMeta:   map[string]HistoryEntry{},
-		historyStore:  NewFileHistoryStore(),
+		historyStore:  historyStore,
 		apiClient:     api.NewEnvClient(),
+		warning:       startupWarning,
 	}
 }
 
@@ -225,11 +234,12 @@ func (m Model) visibleResultRows() int {
 
 // SearchResultsMsg contains search results from the API.
 type SearchResultsMsg struct {
-	Results []types.Listing
-	Mode    api.SearchMode
-	Warning string
-	Err     error
-	gen     int
+	Results        []types.Listing
+	Mode           api.SearchMode
+	Warning        string
+	Err            error
+	ProviderErrors []api.ProviderError
+	gen            int
 }
 
 type openURLResultMsg struct {

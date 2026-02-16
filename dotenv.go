@@ -5,8 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 )
+
+var allowedDotEnvKeys = map[string]struct{}{
+	"BRAVE_API_KEY":       {},
+	"TAVILY_API_KEY":      {},
+	"FIRECRAWL_API_KEY":   {},
+	"MRKTR_LOW_POWER":     {},
+	"MRKTR_REDUCE_MOTION": {},
+}
 
 // loadDotEnvFile loads KEY=VALUE pairs from a dotenv-style file.
 // Existing process env values are preserved and take precedence.
@@ -22,6 +31,7 @@ func loadDotEnvFile(path string) error {
 
 	scanner := bufio.NewScanner(file)
 	lineNo := 0
+	ignoredKeys := map[string]struct{}{}
 	for scanner.Scan() {
 		lineNo++
 		line := strings.TrimSpace(scanner.Text())
@@ -36,6 +46,10 @@ func loadDotEnvFile(path string) error {
 		if !ok {
 			continue
 		}
+		if !isAllowedDotEnvKey(key) {
+			ignoredKeys[key] = struct{}{}
+			continue
+		}
 
 		if _, exists := os.LookupEnv(key); exists {
 			continue
@@ -47,8 +61,21 @@ func loadDotEnvFile(path string) error {
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("scan dotenv file: %w", err)
 	}
+	if len(ignoredKeys) > 0 {
+		keys := make([]string, 0, len(ignoredKeys))
+		for key := range ignoredKeys {
+			keys = append(keys, key)
+		}
+		slices.Sort(keys)
+		return fmt.Errorf("ignored unknown .env keys: %s", strings.Join(keys, ", "))
+	}
 
 	return nil
+}
+
+func isAllowedDotEnvKey(key string) bool {
+	_, ok := allowedDotEnvKeys[strings.TrimSpace(key)]
+	return ok
 }
 
 func parseDotEnvLine(line string) (key, value string, ok bool) {

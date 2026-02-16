@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -37,6 +38,32 @@ func TestSparklineWidth(t *testing.T) {
 	sparkline := renderSparkline(prices, width)
 	if got := lipgloss.Width(sparkline); got != width {
 		t.Fatalf("expected sparkline visual width %d, got %d", width, got)
+	}
+}
+
+func TestRenderDetailOverlaySanitizesControlSequences(t *testing.T) {
+	m := newTestModel()
+	m.results = []types.Listing{
+		{
+			Platform:  "eBay",
+			Price:     99.99,
+			Condition: "Used",
+			Status:    "Active",
+			Title:     "Item \x1b]2;owned\x07 \x1b[2J title",
+			URL:       "https://example.com/\x1b[2Jitem",
+		},
+	}
+	m.selectedIndex = 0
+
+	out := m.renderDetailOverlay(80)
+	if strings.Contains(out, "]2;owned") || strings.Contains(out, "[2J") {
+		t.Fatalf("expected terminal control sequences to be stripped, got: %q", out)
+	}
+}
+
+func TestFormatPercentHandlesInfiniteValues(t *testing.T) {
+	if got := formatPercent(math.Inf(1)); !strings.Contains(got, "N/A") {
+		t.Fatalf("expected infinite percent to render as N/A, got %q", got)
 	}
 }
 

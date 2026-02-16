@@ -208,8 +208,13 @@ func (idx *ProductIndex) Suggest(prefix string) []string {
 			baseScore = cosineSimilarity(queryVector, product.vector)
 		}
 
-		if strings.HasPrefix(product.nameLower, p) {
-			score := 3.0 + baseScore
+		namePrefix := strings.HasPrefix(product.nameLower, p)
+		nameTokenPrefix := tokenHasPrefix(product.nameLower, p)
+		if namePrefix || nameTokenPrefix {
+			score := 2.4 + baseScore
+			if namePrefix {
+				score = 3.0 + baseScore
+			}
 			if product.nameLower == p {
 				score += 1.0
 			}
@@ -220,11 +225,16 @@ func (idx *ProductIndex) Suggest(prefix string) []string {
 		}
 
 		for i, synonym := range product.synonymsLower {
-			if !strings.HasPrefix(synonym, p) {
+			synPrefix := strings.HasPrefix(synonym, p)
+			synTokenPrefix := tokenHasPrefix(synonym, p)
+			if !synPrefix && !synTokenPrefix {
 				continue
 			}
 
-			score := 4.0 + baseScore
+			score := 3.4 + baseScore
+			if synPrefix {
+				score = 4.0 + baseScore
+			}
 			if synonym == p {
 				score += 1.0
 			}
@@ -259,6 +269,18 @@ func (idx *ProductIndex) Suggest(prefix string) []string {
 		}
 	}
 	return out
+}
+
+func tokenHasPrefix(text, prefix string) bool {
+	if prefix == "" {
+		return false
+	}
+	for _, token := range tokenPattern.FindAllString(strings.ToLower(text), -1) {
+		if strings.HasPrefix(token, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func loadProductCatalog() []ProductEntry {
